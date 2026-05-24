@@ -1,4 +1,5 @@
 import type { Config, Context } from "@netlify/functions";
+import { XMLParser } from "fast-xml-parser";
 
 type WeatherReport = {
   id: string;
@@ -45,11 +46,34 @@ type StockReport = {
   error?: string;
 };
 
+type TrendingRepo = {
+  name: string;
+  fullName: string;
+  url: string;
+  description: string;
+  summary: string;
+  stars: number;
+  language: string | null;
+  topics: string[];
+  updatedAt: string;
+};
+
+type NewsItem = {
+  title: string;
+  source: string;
+  url: string;
+  publishedAt: string;
+  category: "国内" | "国际";
+  summary: string;
+};
+
 type DashboardResponse = {
   updatedAt: string;
   weather: WeatherReport[];
   horoscopes: HoroscopeReport[];
   stocks: StockReport[];
+  trendingRepos: TrendingRepo[];
+  news: NewsItem[];
   notices: string[];
 };
 
@@ -61,7 +85,6 @@ type OpenMeteoResponse = {
     wind_speed_10m?: number;
   };
   daily?: {
-    time?: string[];
     temperature_2m_max?: number[];
     temperature_2m_min?: number[];
     precipitation_probability_max?: number[];
@@ -87,8 +110,35 @@ type AlphaVantageDaily = {
       "4. close"?: string;
     }
   >;
-  "Error Message"?: string;
-  Note?: string;
+};
+
+type GitHubSearchResponse = {
+  items?: Array<{
+    name: string;
+    full_name: string;
+    html_url: string;
+    description: string | null;
+    stargazers_count: number;
+    language: string | null;
+    topics?: string[];
+    updated_at: string;
+  }>;
+};
+
+type RssItem = {
+  title?: string;
+  link?: string;
+  pubDate?: string;
+  description?: string;
+  source?: string | { "#text"?: string };
+};
+
+type RssFeed = {
+  rss?: {
+    channel?: {
+      item?: RssItem | RssItem[];
+    };
+  };
 };
 
 const weatherLocations = [
@@ -101,12 +151,28 @@ const horoscopeSigns = [
   { sign: "双鱼座", owner: "老婆" },
 ];
 
-const watchedStocks = [
+const defaultStocks = [
   { symbol: "SAP", name: "SAP" },
   { symbol: "NVDA", name: "英伟达" },
   { symbol: "AAPL", name: "苹果" },
   { symbol: "SNDK", name: "闪迪" },
 ];
+
+const stockNames: Record<string, string> = {
+  AAPL: "苹果",
+  AMD: "AMD",
+  AMZN: "亚马逊",
+  AVGO: "博通",
+  BABA: "阿里巴巴",
+  GOOGL: "Alphabet",
+  META: "Meta",
+  MSFT: "微软",
+  NFLX: "Netflix",
+  NVDA: "英伟达",
+  SAP: "SAP",
+  SNDK: "闪迪",
+  TSLA: "特斯拉",
+};
 
 const weatherCodeText: Record<number, string> = {
   0: "晴朗",
@@ -149,33 +215,31 @@ export default async (req: Request, _context: Context) => {
     return json({ error: "Method not allowed" }, 405);
   }
 
-  const [weatherResults, stocks] = await Promise.all([
+  const symbols = parseSymbols(new URL(req.url).searchParams.get("symbols"));
+  const [weather, stocks, trendingRepos, news] = await Promise.all([
     getWeatherReports(),
-    getStockReports(),
+    getStockReports(symbols),
+    getTrendingRepos(),
+    getNewsItems(),
   ]);
 
-  const notices: string[] = [];
-  const finnhubKey = getEnv("FINNHUB_API_KEY");
-  const alphaKey = getEnv("ALPHA_VANTAGE_API_KEY");
-
-  if (!finnhubKey) {
-    notices.push("FINNHUB_API_KEY is not configured. Live quotes are unavailable.");
-  }
-
-  if (!alphaKey) {
-    notices.push("ALPHA_VANTAGE_API_KEY is not configured. Chart fallback is unavailable.");
-  }
+  const notices = [
+    ...collectErrors("GitHub 热门项目", trendingRepos.length),
+    ...collectErrors("新闻", news.length),
+  ];
 
   const body: DashboardResponse = {
     updatedAt: new Date().toISOString(),
-    weather: weatherResults,
+    weather,
     horoscopes: getHoroscopeReports(),
     stocks,
+    trendingRepos,
+    news,
     notices,
   };
 
   return json(body, 200, {
-    "Cache-Control": "public, max-age=120, stale-while-revalidate=300",
+    "Cache-Control": "public, max-age=180, stale-while-revalidate=600",
   });
 };
 
@@ -185,6 +249,17 @@ export const config: Config = {
 
 function getEnv(key: string): string | undefined {
   return Netlify.env.get(key);
+}
+
+function parseSymbols(value: string | null): Array<{ symbol: string; name: string }> {
+  const symbols = (value ?? "")
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter((item) => /^[A-Z.]{1,8}$/.test(item))
+    .slice(0, 24);
+
+  const unique = Array.from(new Set(symbols.length > 0 ? symbols : defaultStocks.map((item) => item.symbol)));
+  return unique.map((symbol) => ({ symbol, name: stockNames[symbol] ?? symbol }));
 }
 
 async function getWeatherReports(): Promise<WeatherReport[]> {
@@ -233,7 +308,7 @@ async function getWeatherReports(): Promise<WeatherReport[]> {
       humidity: null,
       windSpeed: null,
       precipitationProbability: null,
-      error: result.reason instanceof Error ? result.reason.message : "Weather request failed",
+      error: getErrorMessage(result.reason, "Weather request failed"),
     };
   });
 }
@@ -257,15 +332,15 @@ function getHoroscopeReports(): HoroscopeReport[] {
   }));
 }
 
-async function getStockReports(): Promise<StockReport[]> {
-  const results = await Promise.allSettled(watchedStocks.map((stock) => getStockReport(stock)));
+async function getStockReports(stocks: Array<{ symbol: string; name: string }>): Promise<StockReport[]> {
+  const results = await Promise.allSettled(stocks.map((stock) => getStockReport(stock)));
 
   return results.map((result, index) => {
     if (result.status === "fulfilled") {
       return result.value;
     }
 
-    const stock = watchedStocks[index];
+    const stock = stocks[index];
     return {
       symbol: stock.symbol,
       name: stock.name,
@@ -275,7 +350,7 @@ async function getStockReports(): Promise<StockReport[]> {
       currency: "USD",
       chart: [],
       source: "unavailable",
-      error: result.reason instanceof Error ? result.reason.message : "Stock request failed",
+      error: getErrorMessage(result.reason, "Stock request failed"),
     };
   });
 }
@@ -285,10 +360,11 @@ async function getStockReport(stock: { symbol: string; name: string }): Promise<
   const alphaKey = getEnv("ALPHA_VANTAGE_API_KEY");
   const quote = finnhubKey ? await getFinnhubQuote(stock.symbol, finnhubKey).catch(() => null) : null;
   let chart: StockPoint[] = [];
-  let source = "finnhub";
+  let source = "stooq";
 
   if (finnhubKey) {
     chart = await getFinnhubCandles(stock.symbol, finnhubKey).catch(() => []);
+    source = chart.length > 0 ? "finnhub" : source;
   }
 
   if (chart.length < 2 && alphaKey) {
@@ -296,19 +372,27 @@ async function getStockReport(stock: { symbol: string; name: string }): Promise<
     source = chart.length > 0 ? "alpha-vantage" : source;
   }
 
+  if (chart.length < 2) {
+    chart = await getStooqDaily(stock.symbol).catch(() => []);
+    source = chart.length > 0 ? "stooq" : source;
+  }
+
   const fallbackPrice = chart.at(-1)?.close ?? null;
+  const previous = chart.at(-2)?.close ?? null;
   const price = toNumberOrNull(quote?.c) ?? fallbackPrice;
+  const change = toNumberOrNull(quote?.d) ?? calculateChange(price, previous);
+  const changePercent = toNumberOrNull(quote?.dp) ?? calculateChangePercent(change, previous);
 
   return {
     symbol: stock.symbol,
     name: stock.name,
     price,
-    change: toNumberOrNull(quote?.d),
-    changePercent: toNumberOrNull(quote?.dp),
+    change,
+    changePercent,
     currency: "USD",
     chart,
     source,
-    error: getStockError(finnhubKey, alphaKey, quote, chart),
+    error: price === null && chart.length === 0 ? "暂时没有找到这个股票的数据" : undefined,
   };
 }
 
@@ -372,10 +456,105 @@ async function getAlphaVantageDaily(symbol: string, apikey: string): Promise<Sto
     .slice(-5);
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
+async function getStooqDaily(symbol: string): Promise<StockPoint[]> {
+  const normalized = `${symbol.toLowerCase().replace(".", "-")}.us`;
+  const params = new URLSearchParams({ s: normalized, i: "d" });
+  const text = await fetchText(`https://stooq.com/q/d/l/?${params.toString()}`);
+  const rows = text
+    .trim()
+    .split("\n")
+    .slice(1)
+    .map((row) => row.split(","))
+    .filter((row) => row.length >= 5);
+
+  return rows
+    .map((row) => ({
+      date: row[0],
+      close: Number(row[4]),
+    }))
+    .filter((point) => point.date && Number.isFinite(point.close))
+    .slice(-5);
+}
+
+async function getTrendingRepos(): Promise<TrendingRepo[]> {
+  const pushedAfter = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const params = new URLSearchParams({
+    q: `stars:>1000 pushed:>${pushedAfter}`,
+    sort: "stars",
+    order: "desc",
+    per_page: "20",
+  });
+
+  const data = await fetchJson<GitHubSearchResponse>(`https://api.github.com/search/repositories?${params}`, {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "daily-signal-dashboard",
+  }).catch(() => ({ items: [] }));
+
+  return (data.items ?? []).slice(0, 20).map((repo) => {
+    const description = repo.description?.trim() || "这个项目暂无简介。";
+    const language = repo.language ? `，主要语言是 ${repo.language}` : "";
+    const topicText = repo.topics?.length ? `，主题包括 ${repo.topics.slice(0, 3).join("、")}` : "";
+
+    return {
+      name: repo.name,
+      fullName: repo.full_name,
+      url: repo.html_url,
+      description,
+      summary: `这是一个近期仍活跃的高星项目${language}${topicText}。${description}`,
+      stars: repo.stargazers_count,
+      language: repo.language,
+      topics: repo.topics ?? [],
+      updatedAt: repo.updated_at,
+    };
+  });
+}
+
+async function getNewsItems(): Promise<NewsItem[]> {
+  const domesticUrl =
+    "https://news.google.com/rss/search?q=%E4%B8%AD%E5%9B%BD%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans";
+  const globalUrl =
+    "https://news.google.com/rss/search?q=%E5%9B%BD%E9%99%85%20OR%20world%20when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans";
+
+  const [domestic, international] = await Promise.all([
+    getRssNews(domesticUrl, "国内").catch(() => []),
+    getRssNews(globalUrl, "国际").catch(() => []),
+  ]);
+
+  return [...domestic.slice(0, 10), ...international.slice(0, 10)].slice(0, 20);
+}
+
+async function getRssNews(url: string, category: "国内" | "国际"): Promise<NewsItem[]> {
+  const xml = await fetchText(url);
+  const parser = new XMLParser({
+    ignoreAttributes: false,
+    trimValues: true,
+  });
+  const parsed = parser.parse(xml) as RssFeed;
+  const items = parsed.rss?.channel?.item;
+  const list = Array.isArray(items) ? items : items ? [items] : [];
+
+  return list.map((item) => {
+    const rawTitle = stripHtml(item.title ?? "未命名新闻");
+    const source = getNewsSource(item.source, rawTitle);
+    const title = rawTitle.replace(/\s+-\s+[^-]+$/, "");
+    const summary = stripHtml(item.description ?? "").replace(rawTitle, "").trim();
+
+    return {
+      title,
+      source,
+      url: item.link ?? "#",
+      publishedAt: item.pubDate ? new Date(item.pubDate).toISOString() : new Date().toISOString(),
+      category,
+      summary: summary || `${source} 发布的${category}热点新闻。`,
+    };
+  });
+}
+
+async function fetchJson<T>(url: string, headers: Record<string, string> = {}): Promise<T> {
   const response = await fetch(url, {
     headers: {
       Accept: "application/json",
+      ...headers,
     },
   });
 
@@ -384,6 +563,21 @@ async function fetchJson<T>(url: string): Promise<T> {
   }
 
   return (await response.json()) as T;
+}
+
+async function fetchText(url: string): Promise<string> {
+  const response = await fetch(url, {
+    headers: {
+      Accept: "text/plain, text/csv, application/rss+xml, application/xml, text/xml",
+      "User-Agent": "daily-signal-dashboard",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed with ${response.status}`);
+  }
+
+  return response.text();
 }
 
 function json(body: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -434,21 +628,49 @@ function toNumberOrNull(value: number | undefined): number | null {
   return Number(value.toFixed(2));
 }
 
-function getStockError(
-  finnhubKey: string | undefined,
-  alphaKey: string | undefined,
-  quote: FinnhubQuote | null,
-  chart: StockPoint[],
-): string | undefined {
-  if (!finnhubKey) {
-    return "Missing FINNHUB_API_KEY";
+function calculateChange(price: number | null, previous: number | null): number | null {
+  if (price === null || previous === null) {
+    return null;
   }
 
-  if (!quote?.c && chart.length === 0) {
-    return alphaKey
-      ? "Stock data is temporarily unavailable"
-      : "Missing ALPHA_VANTAGE_API_KEY for chart fallback";
+  return Number((price - previous).toFixed(2));
+}
+
+function calculateChangePercent(change: number | null, previous: number | null): number | null {
+  if (change === null || previous === null || previous === 0) {
+    return null;
   }
 
-  return undefined;
+  return Number(((change / previous) * 100).toFixed(2));
+}
+
+function stripHtml(value: string): string {
+  return value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getNewsSource(source: RssItem["source"], title: string): string {
+  if (typeof source === "string" && source.trim()) {
+    return source.trim();
+  }
+
+  if (source && typeof source === "object" && source["#text"]) {
+    return source["#text"];
+  }
+
+  return title.split(" - ").at(-1)?.trim() || "News";
+}
+
+function collectErrors(label: string, length: number): string[] {
+  return length === 0 ? [`${label}暂时没有拉到数据，稍后会自动重试。`] : [];
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
