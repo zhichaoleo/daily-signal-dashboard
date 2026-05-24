@@ -19,7 +19,7 @@ type AlphaVantageDaily = { "Time Series (Daily)"?: Record<string, { "4. close"?:
 type YahooChartResponse = { chart?: { result?: Array<{ meta?: Record<string, number | string | undefined>; timestamp?: number[]; indicators?: { quote?: Array<{ close?: Array<number | null> }> } }> } };
 type GitHubSearchResponse = { items?: Array<{ name: string; full_name: string; html_url: string; description: string | null; stargazers_count: number; language: string | null; topics?: string[]; updated_at: string }> };
 type RssFeed = { rss?: { channel?: { item?: RssItem | RssItem[] } } };
-type RssItem = { title?: string; link?: string; pubDate?: string; description?: string; source?: string | { "#text"?: string }; "media:thumbnail"?: { "@_url"?: string } | Array<{ "@_url"?: string }> };
+type RssItem = { title?: string; link?: string; pubDate?: string; description?: string; source?: string | { "#text"?: string }; "media:thumbnail"?: { "@_url"?: string } | Array<{ "@_url"?: string }>; "media:content"?: { "@_url"?: string; "@_medium"?: string } | Array<{ "@_url"?: string; "@_medium"?: string }> };
 
 const weatherLocations = [
   { id: "jiading", district: "上海嘉定", latitude: 31.3747, longitude: 121.2653 },
@@ -29,15 +29,18 @@ const defaultStocks = [{ symbol: "SAP", name: "SAP" }, { symbol: "NVDA", name: "
 const stockNames: Record<string, string> = { AAPL: "苹果", AMD: "AMD", AMZN: "亚马逊", AVGO: "博通", BABA: "阿里巴巴", GOOGL: "Alphabet", META: "Meta", MSFT: "微软", NFLX: "Netflix", NVDA: "英伟达", SAP: "SAP", SNDK: "闪迪", TSLA: "特斯拉" };
 const weatherCodeText: Record<number, string> = { 0: "晴朗", 1: "晴间多云", 2: "局部多云", 3: "阴", 45: "雾", 48: "霜雾", 51: "小毛毛雨", 53: "毛毛雨", 55: "较强毛毛雨", 61: "小雨", 63: "中雨", 65: "大雨", 71: "小雪", 73: "中雪", 75: "大雪", 80: "阵雨", 81: "较强阵雨", 82: "强阵雨", 95: "雷雨" };
 const curatedNewsSources: NewsSource[] = [
+  // 国内中文（plink 代理，文章内容好但 RSS 无图）
   { id: "thepaper",    label: "澎湃新闻",   region: "domestic",      feedUrl: "https://plink.anyfeeder.com/thepaper",          siteUrl: "https://www.thepaper.cn" },
   { id: "caixin",      label: "财新网",     region: "domestic",      feedUrl: "https://plink.anyfeeder.com/weixin/caixinwang",  siteUrl: "https://www.caixin.com" },
-  { id: "bjnews",      label: "新京报",     region: "domestic",      feedUrl: "https://plink.anyfeeder.com/bjnews",             siteUrl: "https://www.bjnews.com.cn" },
   { id: "36kr",        label: "36氪",       region: "domestic",      feedUrl: "https://plink.anyfeeder.com/36kr",               siteUrl: "https://36kr.com" },
   { id: "huxiu",       label: "虎嗅网",     region: "domestic",      feedUrl: "https://plink.anyfeeder.com/huxiu",              siteUrl: "https://www.huxiu.com" },
-  { id: "reuters-cn",  label: "路透中文",   region: "international", feedUrl: "https://plink.anyfeeder.com/reuters/cn",         siteUrl: "https://cn.reuters.com" },
-  { id: "bbc-cn",      label: "BBC中文",    region: "international", feedUrl: "https://plink.anyfeeder.com/bbc/cn",             siteUrl: "https://www.bbc.com/zhongwen" },
+  // 国际中文（原始 RSS，带 media:thumbnail）
+  { id: "bbc-cn",      label: "BBC中文",    region: "international", feedUrl: "https://feeds.bbci.co.uk/zhongwen/simp/rss.xml", siteUrl: "https://www.bbc.com/zhongwen" },
+  // 国际英文（带图，Netlify 可访问）
+  { id: "bloomberg",   label: "Bloomberg",  region: "international", feedUrl: "https://feeds.bloomberg.com/markets/news.rss",   siteUrl: "https://www.bloomberg.com" },
+  { id: "marketwatch", label: "MarketWatch",region: "international", feedUrl: "https://feeds.content.dowjones.io/public/rss/mw_topstories", siteUrl: "https://www.marketwatch.com" },
+  { id: "wired",       label: "Wired",      region: "international", feedUrl: "https://www.wired.com/feed/rss",                 siteUrl: "https://www.wired.com" },
   { id: "dw-cn",       label: "德国之声",   region: "international", feedUrl: "https://plink.anyfeeder.com/dw/cn",              siteUrl: "https://www.dw.com/zh" },
-  { id: "ftchinese",   label: "FT中文网",   region: "international", feedUrl: "https://plink.anyfeeder.com/ftchinese",          siteUrl: "https://www.ftchinese.com" },
   { id: "guancha",     label: "观察者网",   region: "international", feedUrl: "https://plink.anyfeeder.com/guanchazhe",         siteUrl: "https://www.guancha.cn" },
 ];
 
@@ -240,7 +243,11 @@ function hash(value: string): number { let result = 2166136261; for (const char 
 function getRssThumbnail(item: RssItem): string {
   const thumb = item["media:thumbnail"];
   if (Array.isArray(thumb)) return String(thumb[0]?.["@_url"] ?? "");
-  return typeof thumb === "object" && thumb ? String(thumb["@_url"] ?? "") : "";
+  if (typeof thumb === "object" && thumb) return String(thumb["@_url"] ?? "");
+  const content = item["media:content"];
+  if (Array.isArray(content)) return String(content[0]?.["@_url"] ?? "");
+  if (typeof content === "object" && content) return String(content["@_url"] ?? "");
+  return "";
 }
 function extractImageFromHtml(html: string): string {
   const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
@@ -264,13 +271,13 @@ function calculateChangePercent(change: number | null, previous: number | null):
 function stripHtml(value: string): string { return value.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#39;/g, "'").replace(/\s+/g, " ").trim(); }
 function getNewsSource(source: RssItem["source"], title: string): string { if (typeof source === "string" && source.trim()) return source.trim(); if (source && typeof source === "object" && source["#text"]) return source["#text"]; return title.split(" - ").at(-1)?.trim() || "News"; }
 function getNewsCategory(sourceId: string, title: string): string {
-  if (sourceId === "caixin" || sourceId === "ftchinese") return "财经";
-  if (sourceId === "36kr" || sourceId === "huxiu") return "科技";
+  if (sourceId === "caixin" || sourceId === "bloomberg" || sourceId === "marketwatch") return "财经";
+  if (sourceId === "36kr" || sourceId === "huxiu" || sourceId === "wired") return "科技";
   if (sourceId === "thepaper" || sourceId === "bjnews") return "国内";
   if (["reuters-cn", "bbc-cn", "dw-cn", "guancha"].includes(sourceId)) return "国际";
   const lowerTitle = title.toLowerCase();
-  if (/股|基金|经济|gdp|cpi|pmi|美联储|通胀|降息/.test(lowerTitle)) return "财经";
-  if (/ai|人工智能|芯片|科技|苹果|微软|谷歌|英伟达|deepseek/.test(lowerTitle)) return "科技";
+  if (/股|基金|经济|gdp|cpi|pmi|美联储|通胀|降息|market|fed|inflation/.test(lowerTitle)) return "财经";
+  if (/ai|人工智能|芯片|科技|苹果|微软|谷歌|英伟达|deepseek|tech|silicon/.test(lowerTitle)) return "科技";
   return "国内";
 }
 function getErrorMessage(error: unknown, fallback: string): string { return error instanceof Error ? error.message : fallback; }
