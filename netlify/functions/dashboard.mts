@@ -7,11 +7,10 @@ type HoroscopeDay = { date: string; summary: string; mood: string; focus: string
 type HoroscopeReport = { sign: string; owner: string; days: HoroscopeDay[] };
 type StockReport = { symbol: string; name: string; price: number | null; change: number | null; changePercent: number | null; currency: string; chart: Point[]; source: string; open?: number | null; high?: number | null; low?: number | null; volume?: number | null; marketCap?: number | null; fiftyTwoWeekHigh?: number | null; fiftyTwoWeekLow?: number | null; dayRange?: string | null; error?: string };
 type InsightItem = { rank: number; title: string; source: string; summary: string; imageUrl: string; metric?: string; publishedAt?: string; tag?: string };
-type SocialBlock = { platform: "小红书" | "微博" | "知乎"; status: "live" | "needs-opencli" | "fallback"; items: InsightItem[] };
 type MarketRow = { rank: number; code: string; name: string; price: number | string; changePercent: number | string; change?: number | string; turnover?: number | string; marketCap?: number | string; market?: string };
 type MarketPulse = { markets: Array<{ market: string; gainers: MarketRow[]; losers: MarketRow[] }>; sectors: { gainers: MarketRow[]; losers: MarketRow[] } };
 type TrendingRepo = { name: string; fullName: string; url: string; description: string; summary: string; stars: number; language: string | null; topics: string[]; updatedAt: string };
-type DashboardResponse = { updatedAt: string; weather: WeatherReport[]; horoscopes: HoroscopeReport[]; stocks: StockReport[]; domesticNews: InsightItem[]; internationalNews: InsightItem[]; socialTrends: SocialBlock[]; marketPulse: MarketPulse; trendingRepos: TrendingRepo[]; notices: string[] };
+type DashboardResponse = { updatedAt: string; weather: WeatherReport[]; horoscopes: HoroscopeReport[]; stocks: StockReport[]; domesticNews: InsightItem[]; internationalNews: InsightItem[]; marketPulse: MarketPulse; trendingRepos: TrendingRepo[]; notices: string[] };
 
 type OpenMeteoResponse = { current?: { temperature_2m?: number; relative_humidity_2m?: number; weather_code?: number; wind_speed_10m?: number }; daily?: { temperature_2m_max?: number[]; temperature_2m_min?: number[]; precipitation_probability_max?: number[] } };
 type FinnhubQuote = { c?: number; d?: number; dp?: number };
@@ -39,12 +38,11 @@ export default async (req: Request, _context: Context) => {
   if (req.method !== "GET") return json({ error: "Method not allowed" }, 405);
 
   const symbols = parseSymbols(new URL(req.url).searchParams.get("symbols"));
-  const [weather, stocks, domesticNews, internationalNews, socialTrends, marketPulse, trendingRepos] = await Promise.all([
+  const [weather, stocks, domesticNews, internationalNews, marketPulse, trendingRepos] = await Promise.all([
     getWeatherReports(),
     getStockReports(symbols),
     getDomesticNews(),
     getInternationalNews(),
-    getSocialTrends(),
     getMarketPulse(),
     getTrendingRepos(),
   ]);
@@ -52,10 +50,9 @@ export default async (req: Request, _context: Context) => {
   const notices = [
     domesticNews.length === 0 ? "国内新闻暂时没有拉到数据。" : "",
     internationalNews.length === 0 ? "国际新闻暂时没有拉到数据。" : "",
-    socialTrends.some((block) => block.status === "needs-opencli") ? "小红书/微博/知乎完整图文热榜需要本机 opencli Browser Bridge 同步。" : "",
   ].filter(Boolean);
 
-  return json({ updatedAt: new Date().toISOString(), weather, horoscopes: getHoroscopeReports(), stocks, domesticNews, internationalNews, socialTrends, marketPulse, trendingRepos, notices } satisfies DashboardResponse, 200, {
+  return json({ updatedAt: new Date().toISOString(), weather, horoscopes: getHoroscopeReports(), stocks, domesticNews, internationalNews, marketPulse, trendingRepos, notices } satisfies DashboardResponse, 200, {
     "Cache-Control": "public, max-age=180, stale-while-revalidate=600",
   });
 };
@@ -148,30 +145,6 @@ async function getRssNews(url: string, tag: string): Promise<InsightItem[]> {
   });
 }
 
-async function getSocialTrends(): Promise<SocialBlock[]> {
-  const zhihu = await getZhihuHot().catch(() => []);
-  const weibo = await getWeiboHot().catch(() => []);
-  return [
-    { platform: "小红书", status: "needs-opencli", items: makeOpenCliNeeded("小红书") },
-    { platform: "微博", status: weibo.length ? "live" : "needs-opencli", items: weibo.length ? weibo : makeOpenCliNeeded("微博") },
-    { platform: "知乎", status: zhihu.length ? "live" : "needs-opencli", items: zhihu.length ? zhihu : makeOpenCliNeeded("知乎") },
-  ];
-}
-
-async function getZhihuHot(): Promise<InsightItem[]> {
-  const data = await fetchJson<{ data?: Array<Record<string, unknown>> }>("https://api.zhihu.com/topstory/hot-list?limit=10", { "User-Agent": "Mozilla/5.0" });
-  return (data.data ?? []).slice(0, 10).map((item, index) => {
-    const target = (item.target ?? {}) as Record<string, unknown>; const title = String(target.title ?? item.title ?? "知乎热榜");
-    return { rank: index + 1, title, source: "知乎热榜", summary: stripHtml(String(target.excerpt ?? target.excerpt_new ?? "高热讨论话题。")), imageUrl: String(target.thumbnail ?? makePoster(title)), metric: String(item.detail_text ?? ""), tag: "24h" };
-  });
-}
-
-async function getWeiboHot(): Promise<InsightItem[]> {
-  const data = await fetchJson<{ data?: { cards?: Array<Record<string, unknown>> } }>("https://m.weibo.cn/api/container/getIndex?containerid=106003type%3D25%26t%3D3%26disable_hot%3D1%26filter_type%3Drealtimehot", { "User-Agent": "Mozilla/5.0", Referer: "https://m.weibo.cn/" });
-  const cards = data.data?.cards ?? [];
-  return cards.slice(0, 10).map((card, index) => { const title = String(card.desc ?? card.title_sub ?? "微博热搜"); return { rank: index + 1, title, source: "微博热搜", summary: `微博过去 24 小时热议话题：${title}。`, imageUrl: String(card.pic ?? makePoster(title)), metric: String(card.desc_extr ?? ""), tag: String(card.label_name ?? "hot") }; });
-}
-
 async function getMarketPulse(): Promise<MarketPulse> {
   const aUp = await getEastmoneyRank("hs-a", "change");
   const aDown = await getEastmoneyRank("hs-a", "drop");
@@ -255,7 +228,4 @@ function makePoster(seed: string): string {
   const hue = hash(seed) % 360;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="hsl(${hue},65%,84%)"/><stop offset="1" stop-color="hsl(${(hue + 60) % 360},60%,72%)"/></linearGradient></defs><rect width="960" height="540" fill="url(#g)"/><circle cx="760" cy="120" r="170" fill="rgba(255,255,255,.28)"/><circle cx="180" cy="430" r="220" fill="rgba(255,255,255,.2)"/></svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-}
-function makeOpenCliNeeded(platform: string): InsightItem[] {
-  return Array.from({ length: 10 }, (_, index) => ({ rank: index + 1, title: `${platform}热榜待同步`, source: "opencli", summary: "当前生产环境不能直接运行本机 opencli Browser Bridge。接入本地同步脚本后，这里会展示过去 24 小时图文热帖。", imageUrl: makePoster(`${platform}-${index}`), tag: "需要同步" }));
 }

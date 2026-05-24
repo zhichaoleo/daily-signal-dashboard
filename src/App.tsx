@@ -11,7 +11,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Sparkles,
   TrendingUp,
   Upload,
   X,
@@ -25,15 +24,15 @@ type HoroscopeDay = { date: string; summary: string; mood: string; focus: string
 type HoroscopeReport = { sign: string; owner: string; days: HoroscopeDay[] };
 type StockReport = { symbol: string; name: string; price: number | null; change: number | null; changePercent: number | null; currency: string; chart: Point[]; source: string; open?: number | null; high?: number | null; low?: number | null; volume?: number | null; marketCap?: number | null; fiftyTwoWeekHigh?: number | null; fiftyTwoWeekLow?: number | null; dayRange?: string | null; error?: string };
 type InsightItem = { rank: number; title: string; source: string; summary: string; imageUrl: string; metric?: string; publishedAt?: string; tag?: string };
-type SocialBlock = { platform: "小红书" | "微博" | "知乎"; status: "live" | "needs-opencli" | "fallback"; items: InsightItem[] };
 type MarketRow = { rank: number; code: string; name: string; price: number | string; changePercent: number | string; change?: number | string; turnover?: number | string; marketCap?: number | string };
 type MarketPulse = { markets: Array<{ market: string; gainers: MarketRow[]; losers: MarketRow[] }>; sectors: { gainers: MarketRow[]; losers: MarketRow[] } };
 type TrendingRepo = { name: string; fullName: string; url: string; description: string; summary: string; stars: number; language: string | null; topics: string[]; updatedAt: string };
-type DashboardResponse = { updatedAt: string; weather: WeatherReport[]; horoscopes: HoroscopeReport[]; stocks: StockReport[]; domesticNews: InsightItem[]; internationalNews: InsightItem[]; socialTrends: SocialBlock[]; marketPulse: MarketPulse; trendingRepos: TrendingRepo[]; notices: string[] };
+type DashboardResponse = { updatedAt: string; weather: WeatherReport[]; horoscopes: HoroscopeReport[]; stocks: StockReport[]; domesticNews: InsightItem[]; internationalNews: InsightItem[]; marketPulse: MarketPulse; trendingRepos: TrendingRepo[]; notices: string[] };
 type PhotoItem = { id: string; src: string; name: string };
 type LoadState = "loading" | "ready" | "error";
 
 const defaultSymbols = ["SAP", "NVDA", "AAPL", "SNDK"];
+const maxPhotoCount = 20;
 const popularStocks = ["AAPL", "MSFT", "NVDA", "GOOGL", "META", "TSLA", "AMZN", "AMD", "AVGO", "NFLX", "SAP", "SNDK", "BABA", "ASML", "TSM", "CRM", "ORCL", "PLTR", "UBER", "SHOP"];
 const money = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 const compact = new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 });
@@ -78,8 +77,10 @@ function App() {
 
   async function handlePhotoUpload(files: FileList | null) {
     if (!files?.length) return;
-    const nextPhotos = await Promise.all(Array.from(files).filter((file) => file.type.startsWith("image/")).slice(0, 6).map(readPhoto));
-    setPhotos([...nextPhotos, ...photos].slice(0, 8));
+    const availableSlots = Math.max(maxPhotoCount - photos.length, 0);
+    if (availableSlots === 0) return;
+    const nextPhotos = await Promise.all(Array.from(files).filter((file) => file.type.startsWith("image/")).slice(0, availableSlots).map(readPhoto));
+    setPhotos([...nextPhotos, ...photos].slice(0, maxPhotoCount));
   }
 
   useEffect(() => { void loadDashboard(stockSymbols); }, [symbolKey]);
@@ -90,7 +91,7 @@ function App() {
       <section className="hero">
         <div className="hero-mark">家庭内参</div>
         <h1>老🐷Dashboard</h1>
-        <p>一个给家里人看的 24h 信息集合地：时事、社媒热度、资产波动、开源项目，以及一点自己的生活。</p>
+        <p>一个给家里人看的 24h 信息集合地：国内外新闻、资产波动、开源项目，以及一点自己的生活。</p>
         <div className="hero-meta">
           <span><CalendarDays size={16} />{new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", weekday: "short" }).format(now)}</span>
           <span>上海时间 {new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hour12: false }).format(now)}</span>
@@ -109,11 +110,6 @@ function App() {
       <section className="news-board">
         <InsightColumn title="国内 Top 10" items={data?.domesticNews ?? []} />
         <InsightColumn title="国际 Top 10" items={data?.internationalNews ?? []} />
-      </section>
-
-      <SectionHeader icon={<Sparkles size={18} />} title="社媒热榜" meta="小红书 / 微博 / 知乎" />
-      <section className="social-grid">
-        {(data?.socialTrends ?? []).map((block) => <SocialPanel key={block.platform} block={block} />)}
       </section>
 
       <SectionHeader icon={<TrendingUp size={18} />} title="市场雷达" meta="自选股 + A/HK/US 涨跌榜 + 板块" />
@@ -147,7 +143,38 @@ function WeatherCard({ weather }: { weather: WeatherReport }) {
 }
 
 function PhotoWall({ photos, onUpload, onRemove }: { photos: PhotoItem[]; onUpload: (files: FileList | null) => void; onRemove: (id: string) => void }) {
-  return <article className="glass photo-wall"><label className="photo-upload"><ImagePlus size={22} /><strong>生活相册</strong><span>上传你和老婆的照片</span><input type="file" accept="image/*" multiple onChange={(event) => void onUpload(event.target.files)} /></label>{photos.slice(0, 3).map((photo) => <figure key={photo.id}><img src={photo.src} alt={photo.name} /><button type="button" onClick={() => onRemove(photo.id)}><X size={13} /></button></figure>)}<Upload className="ghost-icon" size={76} /></article>;
+  const carouselPhotos = photos.length > 1 ? [...photos, ...photos] : photos;
+  const full = photos.length >= maxPhotoCount;
+  return (
+    <article className="glass photo-wall">
+      <div className="photo-wall-head">
+        <div><strong>生活相册</strong><span>{photos.length}/{maxPhotoCount} · 本地保存 · 自动播放</span></div>
+        <label className={full ? "photo-action disabled" : "photo-action"} title={full ? "最多 20 张，删除后可继续上传" : "上传照片"}>
+          <ImagePlus size={18} />
+          <input type="file" accept="image/*" multiple disabled={full} onChange={(event) => void onUpload(event.target.files)} />
+        </label>
+      </div>
+      {photos.length ? (
+        <div className="photo-carousel" style={{ "--photo-count": Math.max(photos.length, 1) } as React.CSSProperties}>
+          <div className={photos.length > 1 ? "photo-track" : "photo-track still"}>
+            {carouselPhotos.map((photo, index) => (
+              <figure key={`${photo.id}-${index}`}>
+                <img src={photo.src} alt={photo.name} />
+                {index < photos.length ? <button type="button" onClick={() => onRemove(photo.id)}><X size={13} /></button> : null}
+              </figure>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <label className="photo-empty">
+          <Upload size={28} />
+          <strong>放几张你们的照片</strong>
+          <span>先存在当前浏览器，最多 20 张</span>
+          <input type="file" accept="image/*" multiple onChange={(event) => void onUpload(event.target.files)} />
+        </label>
+      )}
+    </article>
+  );
 }
 
 function InsightColumn({ title, items }: { title: string; items: InsightItem[] }) {
@@ -156,10 +183,6 @@ function InsightColumn({ title, items }: { title: string; items: InsightItem[] }
 
 function InsightCard({ item }: { item: InsightItem }) {
   return <div className="insight-card"><img src={item.imageUrl} alt="" /><div><span>{item.rank.toString().padStart(2, "0")} · {item.source}{item.metric ? ` · ${item.metric}` : ""}</span><h4>{item.title}</h4><p>{item.summary}</p></div></div>;
-}
-
-function SocialPanel({ block }: { block: SocialBlock }) {
-  return <article className="glass social-panel"><h3>{block.platform}<span>{block.status === "live" ? "Live" : "OpenCLI"}</span></h3>{block.items.slice(0, 10).map((item) => <InsightCard key={`${block.platform}-${item.rank}`} item={item} />)}</article>;
 }
 
 function StockControls({ query, suggestions, symbols, onAdd, onQuery, onRemove }: { query: string; suggestions: string[]; symbols: string[]; onAdd: (symbol: string) => void; onQuery: (query: string) => void; onRemove: (symbol: string) => void }) {
@@ -195,7 +218,29 @@ function MiniChart({ points, positive }: { points: Point[]; positive: boolean })
 
 function Skeleton() { return <div className="glass skeleton" />; }
 function useStoredState<T>(key: string, fallback: T) { const [value, setValue] = useState<T>(() => { try { const stored = window.localStorage.getItem(key); return stored ? JSON.parse(stored) as T : fallback; } catch { return fallback; } }); useEffect(() => { try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ } }, [key, value]); return [value, setValue] as const; }
-function readPhoto(file: File): Promise<PhotoItem> { return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve({ id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`, name: file.name, src: String(reader.result) }); reader.onerror = () => reject(reader.error); reader.readAsDataURL(file); }); }
+function readPhoto(file: File): Promise<PhotoItem> {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      const maxEdge = 1440;
+      const scale = Math.min(1, maxEdge / Math.max(image.naturalWidth, image.naturalHeight));
+      const width = Math.max(1, Math.round(image.naturalWidth * scale));
+      const height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d")?.drawImage(image, 0, 0, width, height);
+      URL.revokeObjectURL(objectUrl);
+      resolve({ id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`, name: file.name, src: canvas.toDataURL("image/jpeg", 0.78) });
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Photo decode failed"));
+    };
+    image.src = objectUrl;
+  });
+}
 function formatValue(value: number | null | undefined) { return typeof value === "number" && Number.isFinite(value) ? money.format(value) : "--"; }
 function formatCompact(value: number | null | undefined) { return typeof value === "number" && Number.isFinite(value) ? compact.format(value) : "--"; }
 function getChartPath(points: Point[]) { return points.map((point, index) => { const { x, y } = mapPoint(point.close, index, points); return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`; }).join(" "); }
