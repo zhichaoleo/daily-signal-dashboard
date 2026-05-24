@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CloudSun,
   ExternalLink,
+  Filter,
   Gauge,
   Github,
   ImagePlus,
@@ -15,6 +16,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Shield,
   Upload,
   X,
 } from "lucide-react";
@@ -22,19 +24,21 @@ import type { CSSProperties, FormEvent, ReactNode } from "react";
 import { useEffect, useState } from "react";
 
 type Point = { date: string; close: number };
+type NewsRegion = "domestic" | "international";
 type WeatherDay = { date: string; condition: string; high: number | null; low: number | null; precipitationProbability: number | null };
 type WeatherReport = { id: string; district: string; condition: string; temperature: number | null; high: number | null; low: number | null; humidity: number | null; windSpeed: number | null; precipitationProbability: number | null; forecast: WeatherDay[]; error?: string };
 type HoroscopeDay = { date: string; summary: string; mood: string; focus: string; luckyColor: string; luckyNumber: number };
 type HoroscopeReport = { sign: string; owner: string; days: HoroscopeDay[] };
 type StockReport = { symbol: string; name: string; price: number | null; change: number | null; changePercent: number | null; currency: string; chart: Point[]; source: string; open?: number | null; high?: number | null; low?: number | null; volume?: number | null; marketCap?: number | null; fiftyTwoWeekHigh?: number | null; fiftyTwoWeekLow?: number | null; dayRange?: string | null; error?: string };
 type RelatedPost = { author: string; title: string; time?: string; url?: string };
-type InsightItem = { rank: number; title: string; source: string; summary: string; imageUrl: string; metric?: string; publishedAt?: string; tag?: string; detail?: string; bullets?: string[]; sourceUrl?: string; relatedPosts?: RelatedPost[] };
+type InsightItem = { rank: number; title: string; source: string; summary: string; imageUrl: string; metric?: string; publishedAt?: string; tag?: string; detail?: string; bullets?: string[]; sourceUrl?: string; relatedPosts?: RelatedPost[]; sourceId?: string; region?: NewsRegion; siteUrl?: string };
+type NewsSource = { id: string; label: string; region: NewsRegion; feedUrl: string; siteUrl: string };
 type TrendingRepo = { name: string; fullName: string; url: string; description: string; summary: string; stars: number; language: string | null; topics: string[]; updatedAt: string };
 type UsageMetric = { label: string; status: "live" | "missing-key" | "manual"; totalCost: number | null; currency: string; budget: number | null; progress: number | null; inputTokens?: number; outputTokens?: number; requests?: number; periodStart: string; periodEnd: string; updatedAt: string; message: string; dailyCosts: Point[] };
-type UsageSummary = { openai: UsageMetric; codex: UsageMetric };
-type DashboardResponse = { updatedAt: string; weather: WeatherReport[]; horoscopes: HoroscopeReport[]; stocks: StockReport[]; domesticNews: InsightItem[]; internationalNews: InsightItem[]; weiboHot: InsightItem[]; usage: UsageSummary; trendingRepos: TrendingRepo[]; notices: string[] };
+type DashboardResponse = { updatedAt: string; weather: WeatherReport[]; horoscopes: HoroscopeReport[]; stocks: StockReport[]; newsFeed: InsightItem[]; newsSources: NewsSource[]; weiboHot: InsightItem[]; trendingRepos: TrendingRepo[]; notices: string[] };
 type SharedPhoto = { id: string; src: string; name: string; createdAt: string };
 type InsightDetailResponse = { detail?: string; imageUrl?: string; bullets?: string[] };
+type AdminUsageResponse = { metric?: UsageMetric; error?: string };
 type LoadState = "loading" | "ready" | "error";
 type ThemeId = "atelier" | "liquid" | "paper" | "midnight";
 
@@ -49,7 +53,7 @@ const themeOptions: Array<{ id: ThemeId; name: string; tone: string }> = [
   { id: "paper", name: "宣纸晨光", tone: "Paper" },
   { id: "midnight", name: "夜航仪表", tone: "Nocturne" },
 ];
-const dashboardFeedRevision = "zaobao-rss-v1";
+const dashboardFeedRevision = "multi-source-news-v1";
 
 function App() {
   const [data, setData] = useState<DashboardResponse | null>(null);
@@ -63,9 +67,18 @@ function App() {
   const [photos, setPhotos] = useState<SharedPhoto[]>([]);
   const [photoState, setPhotoState] = useState<LoadState>("loading");
   const [photoError, setPhotoError] = useState<string | null>(null);
+  const [newsRegion, setNewsRegion] = useState<"all" | NewsRegion>("all");
+  const [newsSourceId, setNewsSourceId] = useState("all");
+  const [adminOpen, setAdminOpen] = useState(false);
   const symbolKey = stockSymbols.join(",");
   const updatedText = data?.updatedAt ? new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit" }).format(new Date(data.updatedAt)) : "等待更新";
   const suggestions = popularStocks.filter((symbol) => symbol.includes(stockQuery.trim().toUpperCase()) && !stockSymbols.includes(symbol)).slice(0, 6);
+  const newsSources = data?.newsSources ?? [];
+  const visibleSourceOptions = newsRegion === "all" ? newsSources : newsSources.filter((source) => source.region === newsRegion);
+  const filteredNews = (data?.newsFeed ?? [])
+    .filter((item) => newsRegion === "all" || item.region === newsRegion)
+    .filter((item) => newsSourceId === "all" || item.sourceId === newsSourceId)
+    .slice(0, 40);
 
   async function loadDashboard(symbols = stockSymbols) {
     setState("loading");
@@ -145,6 +158,9 @@ function App() {
   useEffect(() => { void loadAlbum(); }, []);
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => { const timer = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(timer); }, []);
+  useEffect(() => {
+    if (newsSourceId !== "all" && !visibleSourceOptions.some((source) => source.id === newsSourceId)) setNewsSourceId("all");
+  }, [newsRegion, newsSourceId, visibleSourceOptions]);
 
   return (
     <main className="briefing-shell" data-theme={theme}>
@@ -160,11 +176,11 @@ function App() {
           <span><CalendarDays size={16} />{new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", weekday: "short" }).format(now)}</span>
           <span>上海时间 {new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hour12: false }).format(now)}</span>
           <button type="button" onClick={() => void Promise.all([loadDashboard(), loadAlbum()])}><RefreshCw size={16} className={state === "loading" || photoState === "loading" ? "spin" : ""} />刷新</button>
+          <button type="button" className="hero-admin" onClick={() => setAdminOpen(true)}><Shield size={16} />后台</button>
         </div>
       </section>
 
       <StatusBar state={state} updatedText={updatedText} error={error} notices={data?.notices ?? []} />
-      <UsageMonitor usage={data?.usage} />
 
       <SectionHeader icon={<CloudSun size={18} />} title="天气" meta="上海嘉定 / 浦东 · 今日 + 未来 7 天" />
       <section className="weather-row">{(data?.weather ?? []).map((item) => <WeatherCard key={item.id} weather={item} />)}</section>
@@ -172,10 +188,27 @@ function App() {
       <SectionHeader icon={<ImagePlus size={18} />} title="共享相册" meta="Netlify Blobs · 全设备同步" />
       <PhotoWall photos={photos} state={photoState} error={photoError} onUpload={handlePhotoUpload} onRemove={handlePhotoRemove} />
 
-      <SectionHeader icon={<Newspaper size={18} />} title="新闻内参" meta="过去 24h · 点击看详情" />
-      <section className="news-board">
-        <InsightColumn title="国内 Top 10" items={data?.domesticNews ?? []} onSelect={setSelectedInsight} />
-        <InsightColumn title="国际中文 Top 10" items={data?.internationalNews ?? []} onSelect={setSelectedInsight} />
+      <SectionHeader icon={<Newspaper size={18} />} title="新闻内参" meta="权威来源 · 过去 24h · 按时间排序" />
+      <NewsToolbar
+        region={newsRegion}
+        sourceId={newsSourceId}
+        sources={visibleSourceOptions}
+        onRegionChange={setNewsRegion}
+        onSourceChange={setNewsSourceId}
+      />
+      <section className="source-directory">
+        {newsSources.map((source) => (
+          <a key={source.id} className={newsSourceId === source.id ? "glass source-card active" : "glass source-card"} href={source.siteUrl} target="_blank" rel="noreferrer">
+            <div>
+              <strong>{source.label}</strong>
+              <span>{source.region === "domestic" ? "国内" : "国际"}</span>
+            </div>
+            <ExternalLink size={14} />
+          </a>
+        ))}
+      </section>
+      <section className="news-feed">
+        {filteredNews.map((item, index) => <InsightCard key={`${item.sourceId}-${item.title}-${index}`} item={{ ...item, rank: index + 1 }} onSelect={setSelectedInsight} />)}
       </section>
 
       <SectionHeader icon={<Newspaper size={18} />} title="微博热搜" meta="话题详情里直接看最热 3 条微博" />
@@ -198,6 +231,7 @@ function App() {
       </section>
 
       {selectedInsight ? <InsightModal item={selectedInsight} onClose={() => setSelectedInsight(null)} /> : null}
+      {adminOpen ? <AdminPanel onClose={() => setAdminOpen(false)} /> : null}
     </main>
   );
 }
@@ -208,17 +242,6 @@ function ThemeSwitcher({ value, onChange }: { value: ThemeId; onChange: (theme: 
 
 function StatusBar({ state, updatedText, error, notices }: { state: LoadState; updatedText: string; error: string | null; notices: string[] }) {
   return <section className="status-row"><span className={`status-dot ${state}`} />{state === "loading" ? "同步中" : `更新于 ${updatedText}`}{error ? <b><AlertCircle size={14} />{error}</b> : null}{notices.map((notice) => <b key={notice}><AlertCircle size={14} />{notice}</b>)}</section>;
-}
-
-function UsageMonitor({ usage }: { usage?: UsageSummary }) {
-  if (!usage) return <section className="usage-grid"><Skeleton /><Skeleton /></section>;
-  return <section className="usage-grid"><UsageCard metric={usage.openai} /><UsageCard metric={usage.codex} /></section>;
-}
-
-function UsageCard({ metric }: { metric: UsageMetric }) {
-  const value = metric.totalCost === null ? "--" : `$${money.format(metric.totalCost)}`;
-  const hint = metric.status === "missing-key" ? "这块不是坏了，是还缺一把能读组织账单的钥匙：在 Netlify 环境变量里配置 OPENAI_ADMIN_KEY；可选再配 OPENAI_MONTHLY_BUDGET_USD 作为预算线。" : metric.status === "manual" ? "这块不是代码没接，而是 ChatGPT / Codex 个人订阅目前没有公开的可读用量 API，所以只能先保留手动预算位。" : metric.message;
-  return <article className="glass usage-card"><div><Gauge size={18} /><span>{metric.label}</span><em>{metric.status === "live" ? "Live" : metric.status === "manual" ? "Manual" : "Setup"}</em></div><strong>{value}</strong><p>{hint}</p><div className="progress"><i style={{ width: `${metric.progress ?? 0}%` }} /></div><small>{metric.requests ? `${compact.format(metric.requests)} requests · ` : ""}{metric.inputTokens ? `${compact.format(metric.inputTokens)} in / ${compact.format(metric.outputTokens ?? 0)} out` : `${metric.periodStart} 至 ${metric.periodEnd}`}</small></article>;
 }
 
 function SectionHeader({ icon, title, meta }: { icon: ReactNode; title: string; meta: string }) {
@@ -267,12 +290,133 @@ function PhotoWall({ photos, state, error, onUpload, onRemove }: { photos: Share
   );
 }
 
-function InsightColumn({ title, items, onSelect }: { title: string; items: InsightItem[]; onSelect: (item: InsightItem) => void }) {
-  return <article className="glass insight-column"><h3>{title}</h3>{items.slice(0, 10).map((item) => <InsightCard key={`${title}-${item.rank}-${item.title}`} item={item} onSelect={onSelect} />)}</article>;
+function NewsToolbar({
+  region,
+  sourceId,
+  sources,
+  onRegionChange,
+  onSourceChange,
+}: {
+  region: "all" | NewsRegion;
+  sourceId: string;
+  sources: NewsSource[];
+  onRegionChange: (value: "all" | NewsRegion) => void;
+  onSourceChange: (value: string) => void;
+}) {
+  return (
+    <article className="glass news-toolbar">
+      <div className="news-segmented" aria-label="新闻区域筛选">
+        <button type="button" className={region === "all" ? "active" : ""} onClick={() => onRegionChange("all")}>全部</button>
+        <button type="button" className={region === "domestic" ? "active" : ""} onClick={() => onRegionChange("domestic")}>国内</button>
+        <button type="button" className={region === "international" ? "active" : ""} onClick={() => onRegionChange("international")}>国际</button>
+      </div>
+      <label className="source-select">
+        <Filter size={16} />
+        <select value={sourceId} onChange={(event) => onSourceChange(event.target.value)}>
+          <option value="all">全部来源</option>
+          {sources.map((source) => <option key={source.id} value={source.id}>{source.label}</option>)}
+        </select>
+      </label>
+    </article>
+  );
+}
+
+function AdminPanel({ onClose }: { onClose: () => void }) {
+  const [token, setToken] = useState("");
+  const [budget, setBudget] = useState("");
+  const [state, setState] = useState<LoadState>("ready");
+  const [error, setError] = useState<string | null>(null);
+  const [metric, setMetric] = useState<UsageMetric | null>(null);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setState("loading");
+    setError(null);
+    setMetric(null);
+    try {
+      const response = await fetch("/api/admin-usage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token,
+          budget: budget.trim() ? Number(budget) : null,
+        }),
+      });
+      const payload = await response.json() as AdminUsageResponse;
+      if (!response.ok || !payload.metric) throw new Error(payload.error || `Request failed with ${response.status}`);
+      setMetric(payload.metric);
+      setState("ready");
+    } catch (submitError) {
+      setState("error");
+      setError(submitError instanceof Error ? submitError.message : "Usage request failed");
+    }
+  }
+
+  function handleClose() {
+    setToken("");
+    setBudget("");
+    setMetric(null);
+    setError(null);
+    setState("ready");
+    onClose();
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={handleClose}>
+      <article className="glass admin-panel" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="modal-close" onClick={handleClose}><X size={16} /></button>
+        <div className="admin-copy">
+          <span><Shield size={14} />一次性用量查询</span>
+          <h2>OpenAI Admin</h2>
+          <p>这里不会把 token 写进本地存储、GitHub 或 Netlify 环境变量。它只在这次请求里经过一次函数内存，用完即丢。</p>
+          <form className="admin-form" onSubmit={handleSubmit}>
+            <label>
+              <b>Admin token</b>
+              <input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="sk-admin-..." autoComplete="off" />
+            </label>
+            <label>
+              <b>本月预算（可选）</b>
+              <input type="number" inputMode="decimal" value={budget} onChange={(event) => setBudget(event.target.value)} placeholder="200" />
+            </label>
+            <div className="admin-actions">
+              <button type="submit" disabled={!token.trim() || state === "loading"}>{state === "loading" ? <LoaderCircle size={16} className="spin" /> : <Shield size={16} />}查询现状</button>
+              <button type="button" className="ghost" onClick={handleClose}>关闭</button>
+            </div>
+          </form>
+          {error ? <div className="admin-error"><AlertCircle size={16} />{error}</div> : null}
+          {metric ? <UsageResult metric={metric} /> : null}
+        </div>
+      </article>
+    </div>
+  );
+}
+
+function UsageResult({ metric }: { metric: UsageMetric }) {
+  const value = metric.totalCost === null ? "--" : `$${money.format(metric.totalCost)}`;
+  return (
+    <article className="glass admin-result">
+      <div className="admin-result-head">
+        <div>
+          <strong>{metric.label}</strong>
+          <span>{metric.periodStart} 至 {metric.periodEnd}</span>
+        </div>
+        <em>{metric.status === "live" ? "Live" : metric.status}</em>
+      </div>
+      <div className="admin-metrics">
+        <div><small>花费</small><b>{value}</b></div>
+        <div><small>请求数</small><b>{metric.requests ? compact.format(metric.requests) : "--"}</b></div>
+        <div><small>输入 token</small><b>{metric.inputTokens ? compact.format(metric.inputTokens) : "--"}</b></div>
+        <div><small>输出 token</small><b>{metric.outputTokens ? compact.format(metric.outputTokens) : "--"}</b></div>
+      </div>
+      {metric.budget ? <div className="progress"><i style={{ width: `${metric.progress ?? 0}%` }} /></div> : null}
+      {metric.dailyCosts.length >= 2 ? <MiniChart points={metric.dailyCosts} positive /> : null}
+      <p>{metric.message}</p>
+    </article>
+  );
 }
 
 function InsightCard({ item, onSelect, compact: isCompact = false }: { item: InsightItem; onSelect: (item: InsightItem) => void; compact?: boolean }) {
-  return <button type="button" className={isCompact ? "insight-card compact" : "insight-card"} onClick={() => onSelect(item)}>{shouldRenderInsightImage(item) ? <InsightImage item={item} /> : <div className="insight-thumb-empty"><Newspaper size={18} /></div>}<div><span>{item.rank.toString().padStart(2, "0")} · {item.source}{item.metric ? ` · ${item.metric}` : ""}</span><h4>{item.title}</h4><p>{item.summary}</p></div></button>;
+  return <button type="button" className={isCompact ? "insight-card compact" : "insight-card"} onClick={() => onSelect(item)}>{shouldRenderInsightImage(item) ? <InsightImage item={item} /> : <div className="insight-thumb-empty"><Newspaper size={18} /></div>}<div><span>{item.source}{item.publishedAt ? ` · ${formatDateTime(item.publishedAt)}` : ""}{item.metric ? ` · ${item.metric}` : ""}</span><h4>{item.title}</h4><p>{item.summary}</p></div></button>;
 }
 
 function InsightImage({ item }: { item: InsightItem }) {
