@@ -2,24 +2,24 @@ import {
   AlertCircle,
   ArrowDownRight,
   ArrowUpRight,
-  BarChart3,
   CalendarDays,
   ChevronDown,
   CloudSun,
+  ExternalLink,
   Gauge,
   Github,
   ImagePlus,
+  LoaderCircle,
   Newspaper,
   Palette,
   Plus,
   RefreshCw,
   Search,
-  TrendingUp,
   Upload,
   X,
 } from "lucide-react";
 import type { CSSProperties, FormEvent, ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 type Point = { date: string; close: number };
 type WeatherDay = { date: string; condition: string; high: number | null; low: number | null; precipitationProbability: number | null };
@@ -27,14 +27,14 @@ type WeatherReport = { id: string; district: string; condition: string; temperat
 type HoroscopeDay = { date: string; summary: string; mood: string; focus: string; luckyColor: string; luckyNumber: number };
 type HoroscopeReport = { sign: string; owner: string; days: HoroscopeDay[] };
 type StockReport = { symbol: string; name: string; price: number | null; change: number | null; changePercent: number | null; currency: string; chart: Point[]; source: string; open?: number | null; high?: number | null; low?: number | null; volume?: number | null; marketCap?: number | null; fiftyTwoWeekHigh?: number | null; fiftyTwoWeekLow?: number | null; dayRange?: string | null; error?: string };
-type InsightItem = { rank: number; title: string; source: string; summary: string; imageUrl: string; metric?: string; publishedAt?: string; tag?: string; detail?: string; bullets?: string[]; sourceUrl?: string };
-type MarketRow = { rank: number; code: string; name: string; price: number | string; changePercent: number | string; change?: number | string; turnover?: number | string; marketCap?: number | string };
-type MarketPulse = { markets: Array<{ market: string; gainers: MarketRow[]; losers: MarketRow[] }>; sectors: { gainers: MarketRow[]; losers: MarketRow[] } };
+type RelatedPost = { author: string; title: string; time?: string; url?: string };
+type InsightItem = { rank: number; title: string; source: string; summary: string; imageUrl: string; metric?: string; publishedAt?: string; tag?: string; detail?: string; bullets?: string[]; sourceUrl?: string; relatedPosts?: RelatedPost[] };
 type TrendingRepo = { name: string; fullName: string; url: string; description: string; summary: string; stars: number; language: string | null; topics: string[]; updatedAt: string };
 type UsageMetric = { label: string; status: "live" | "missing-key" | "manual"; totalCost: number | null; currency: string; budget: number | null; progress: number | null; inputTokens?: number; outputTokens?: number; requests?: number; periodStart: string; periodEnd: string; updatedAt: string; message: string; dailyCosts: Point[] };
 type UsageSummary = { openai: UsageMetric; codex: UsageMetric };
-type DashboardResponse = { updatedAt: string; weather: WeatherReport[]; horoscopes: HoroscopeReport[]; stocks: StockReport[]; domesticNews: InsightItem[]; internationalNews: InsightItem[]; weiboHot: InsightItem[]; usage: UsageSummary; marketPulse: MarketPulse; trendingRepos: TrendingRepo[]; notices: string[] };
-type PhotoItem = { id: string; src: string; name: string };
+type DashboardResponse = { updatedAt: string; weather: WeatherReport[]; horoscopes: HoroscopeReport[]; stocks: StockReport[]; domesticNews: InsightItem[]; internationalNews: InsightItem[]; weiboHot: InsightItem[]; usage: UsageSummary; trendingRepos: TrendingRepo[]; notices: string[] };
+type SharedPhoto = { id: string; src: string; name: string; createdAt: string };
+type InsightDetailResponse = { detail?: string; imageUrl?: string; bullets?: string[] };
 type LoadState = "loading" | "ready" | "error";
 type ThemeId = "atelier" | "liquid" | "paper" | "midnight";
 
@@ -56,13 +56,15 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
   const [stockSymbols, setStockSymbols] = useStoredState<string[]>("daily-signal-stocks", defaultSymbols);
-  const [photos, setPhotos] = useStoredState<PhotoItem[]>("daily-signal-photos", []);
-  const [theme, setTheme] = useStoredState<ThemeId>("daily-signal-theme", "liquid");
+  const [theme, setTheme] = useStoredState<ThemeId>("daily-signal-theme", "atelier");
   const [stockQuery, setStockQuery] = useState("");
   const [selectedInsight, setSelectedInsight] = useState<InsightItem | null>(null);
+  const [photos, setPhotos] = useState<SharedPhoto[]>([]);
+  const [photoState, setPhotoState] = useState<LoadState>("loading");
+  const [photoError, setPhotoError] = useState<string | null>(null);
   const symbolKey = stockSymbols.join(",");
-  const suggestions = useMemo(() => popularStocks.filter((symbol) => symbol.includes(stockQuery.trim().toUpperCase()) && !stockSymbols.includes(symbol)).slice(0, 6), [stockQuery, stockSymbols]);
   const updatedText = data?.updatedAt ? new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit" }).format(new Date(data.updatedAt)) : "等待更新";
+  const suggestions = popularStocks.filter((symbol) => symbol.includes(stockQuery.trim().toUpperCase()) && !stockSymbols.includes(symbol)).slice(0, 6);
 
   async function loadDashboard(symbols = stockSymbols) {
     setState("loading");
@@ -75,6 +77,21 @@ function App() {
     } catch (loadError) {
       setState("error");
       setError(loadError instanceof Error ? loadError.message : "Dashboard request failed");
+    }
+  }
+
+  async function loadAlbum() {
+    setPhotoState("loading");
+    setPhotoError(null);
+    try {
+      const response = await fetch("/api/album");
+      if (!response.ok) throw new Error(`Album API returned ${response.status}`);
+      const payload = await response.json() as { photos: SharedPhoto[] };
+      setPhotos(payload.photos ?? []);
+      setPhotoState("ready");
+    } catch (loadError) {
+      setPhotoState("error");
+      setPhotoError(loadError instanceof Error ? loadError.message : "Album request failed");
     }
   }
 
@@ -95,10 +112,36 @@ function App() {
     const availableSlots = Math.max(maxPhotoCount - photos.length, 0);
     if (availableSlots === 0) return;
     const nextPhotos = await Promise.all(Array.from(files).filter((file) => file.type.startsWith("image/")).slice(0, availableSlots).map(readPhoto));
-    setPhotos([...nextPhotos, ...photos].slice(0, maxPhotoCount));
+    setPhotoState("loading");
+    try {
+      for (const photo of nextPhotos) {
+        await fetch("/api/album", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(photo),
+        });
+      }
+      await loadAlbum();
+    } catch (uploadError) {
+      setPhotoState("error");
+      setPhotoError(uploadError instanceof Error ? uploadError.message : "Album upload failed");
+    }
+  }
+
+  async function handlePhotoRemove(id: string) {
+    setPhotoState("loading");
+    try {
+      const response = await fetch(`/api/album?${new URLSearchParams({ id })}`, { method: "DELETE" });
+      if (!response.ok) throw new Error(`Delete failed with ${response.status}`);
+      await loadAlbum();
+    } catch (removeError) {
+      setPhotoState("error");
+      setPhotoError(removeError instanceof Error ? removeError.message : "Album delete failed");
+    }
   }
 
   useEffect(() => { void loadDashboard(stockSymbols); }, [symbolKey]);
+  useEffect(() => { void loadAlbum(); }, []);
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   useEffect(() => { const timer = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(timer); }, []);
 
@@ -106,41 +149,44 @@ function App() {
     <main className="briefing-shell" data-theme={theme}>
       <section className="hero">
         <div className="hero-mark">家庭内参</div>
-        <h1>老🐷Dashboard</h1>
-        <p>一个给家里人看的 24h 信息集合地：中文新闻、微博热榜、资产波动、开源项目，以及一点自己的生活。</p>
+        <div className="hero-brand">
+          <img className="hero-logo" src="/zhu-dashboard-mark.svg" alt="🐷Dashboard logo" />
+          <h1>🐷Dashboard</h1>
+        </div>
+        <p>一个给家里人看的 24h 信息集合地：中文新闻、微博热搜、自选股、开源项目，还有真正的共享生活相册。</p>
         <ThemeSwitcher value={theme} onChange={setTheme} />
         <div className="hero-meta">
           <span><CalendarDays size={16} />{new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", weekday: "short" }).format(now)}</span>
           <span>上海时间 {new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", hour: "2-digit", minute: "2-digit", hour12: false }).format(now)}</span>
-          <button type="button" onClick={() => void loadDashboard()}><RefreshCw size={16} className={state === "loading" ? "spin" : ""} />刷新</button>
+          <button type="button" onClick={() => void Promise.all([loadDashboard(), loadAlbum()])}><RefreshCw size={16} className={state === "loading" || photoState === "loading" ? "spin" : ""} />刷新</button>
         </div>
       </section>
 
       <StatusBar state={state} updatedText={updatedText} error={error} notices={data?.notices ?? []} />
       <UsageMonitor usage={data?.usage} />
 
-      <section className="home-grid">
-        <PhotoWall photos={photos} onUpload={handlePhotoUpload} onRemove={(id) => setPhotos(photos.filter((photo) => photo.id !== id))} />
-        <WeatherBoard weather={data?.weather ?? []} />
-      </section>
+      <SectionHeader icon={<CloudSun size={18} />} title="天气" meta="上海嘉定 / 浦东 · 今日 + 未来 7 天" />
+      <section className="weather-row">{(data?.weather ?? []).map((item) => <WeatherCard key={item.id} weather={item} />)}</section>
 
-      <SectionHeader icon={<Newspaper size={18} />} title="新闻内参" meta="过去 24h · 中文新闻 · 点击看详情" />
+      <SectionHeader icon={<ImagePlus size={18} />} title="共享相册" meta="Netlify Blobs · 全设备同步" />
+      <PhotoWall photos={photos} state={photoState} error={photoError} onUpload={handlePhotoUpload} onRemove={handlePhotoRemove} />
+
+      <SectionHeader icon={<Newspaper size={18} />} title="新闻内参" meta="过去 24h · 点击看详情" />
       <section className="news-board">
         <InsightColumn title="国内 Top 10" items={data?.domesticNews ?? []} onSelect={setSelectedInsight} />
         <InsightColumn title="国际中文 Top 10" items={data?.internationalNews ?? []} onSelect={setSelectedInsight} />
       </section>
 
-      <SectionHeader icon={<BarChart3 size={18} />} title="微博热榜" meta="opencli 快照 · 站内详情" />
+      <SectionHeader icon={<Newspaper size={18} />} title="微博热搜" meta="话题详情里直接看最热 3 条微博" />
       <section className="weibo-strip">
         {(data?.weiboHot ?? []).map((item) => <InsightCard key={`weibo-${item.rank}-${item.title}`} item={item} onSelect={setSelectedInsight} compact />)}
       </section>
 
-      <SectionHeader icon={<TrendingUp size={18} />} title="市场雷达" meta="自选股 + A/HK/US Top 10 + 板块" />
+      <SectionHeader icon={<Gauge size={18} />} title="股票" meta="自选股实时概览" />
       <StockControls query={stockQuery} suggestions={suggestions} symbols={stockSymbols} onAdd={addStock} onQuery={setStockQuery} onRemove={removeStock} />
       <section className="stock-grid">{data?.stocks.map((stock) => <StockCard key={stock.symbol} stock={stock} />) ?? <Skeleton />}</section>
-      {data?.marketPulse ? <MarketPulseView pulse={data.marketPulse} /> : null}
 
-      <SectionHeader icon={<Github size={18} />} title="开源雷达" meta="GitHub 活跃高星项目 Top 10" />
+      <SectionHeader icon={<Github size={18} />} title="开源雷达" meta="GitHub 高星活跃项目 Top 10" />
       <section className="repo-list">{data?.trendingRepos.map((repo, index) => <RepoCard key={repo.fullName} repo={repo} index={index + 1} />)}</section>
 
       <section className="section-block horoscope-bottom">
@@ -170,52 +216,52 @@ function UsageMonitor({ usage }: { usage?: UsageSummary }) {
 
 function UsageCard({ metric }: { metric: UsageMetric }) {
   const value = metric.totalCost === null ? "--" : `$${money.format(metric.totalCost)}`;
-  return <article className="glass usage-card"><div><Gauge size={18} /><span>{metric.label}</span><em>{metric.status === "live" ? "Live" : metric.status === "manual" ? "Manual" : "Setup"}</em></div><strong>{value}</strong><p>{metric.message}</p><div className="progress"><i style={{ width: `${metric.progress ?? 0}%` }} /></div><small>{metric.requests ? `${compact.format(metric.requests)} requests · ` : ""}{metric.inputTokens ? `${compact.format(metric.inputTokens)} in / ${compact.format(metric.outputTokens ?? 0)} out` : `${metric.periodStart} 至 ${metric.periodEnd}`}</small></article>;
+  const hint = metric.status === "missing-key" ? "这块不是坏了，是还缺一把能读组织账单的钥匙：在 Netlify 环境变量里配置 OPENAI_ADMIN_KEY；可选再配 OPENAI_MONTHLY_BUDGET_USD 作为预算线。" : metric.status === "manual" ? "这块不是代码没接，而是 ChatGPT / Codex 个人订阅目前没有公开的可读用量 API，所以只能先保留手动预算位。" : metric.message;
+  return <article className="glass usage-card"><div><Gauge size={18} /><span>{metric.label}</span><em>{metric.status === "live" ? "Live" : metric.status === "manual" ? "Manual" : "Setup"}</em></div><strong>{value}</strong><p>{hint}</p><div className="progress"><i style={{ width: `${metric.progress ?? 0}%` }} /></div><small>{metric.requests ? `${compact.format(metric.requests)} requests · ` : ""}{metric.inputTokens ? `${compact.format(metric.inputTokens)} in / ${compact.format(metric.outputTokens ?? 0)} out` : `${metric.periodStart} 至 ${metric.periodEnd}`}</small></article>;
 }
 
 function SectionHeader({ icon, title, meta }: { icon: ReactNode; title: string; meta: string }) {
   return <div className="section-header"><div>{icon}<h2>{title}</h2></div><span>{meta}</span></div>;
 }
 
-function WeatherBoard({ weather }: { weather: WeatherReport[] }) {
-  return <section className="weather-board">{weather.length ? weather.map((item) => <WeatherCard key={item.id} weather={item} />) : <Skeleton />}</section>;
-}
-
 function WeatherCard({ weather }: { weather: WeatherReport }) {
   return <article className="glass weather-card"><div className="weather-head"><CloudSun size={22} /><span>{weather.district}</span><strong>{weather.temperature ?? "--"}°</strong></div><p>{weather.condition} · 湿度 {weather.humidity ?? "--"}% · 风 {weather.windSpeed ?? "--"}km/h</p><div className="forecast-row">{weather.forecast.slice(0, 7).map((day, index) => <div key={day.date}><b>{index === 0 ? "今天" : day.date.slice(5)}</b><span>{day.condition}</span><em>{day.low ?? "--"} / {day.high ?? "--"}°</em></div>)}</div></article>;
 }
 
-function PhotoWall({ photos, onUpload, onRemove }: { photos: PhotoItem[]; onUpload: (files: FileList | null) => void; onRemove: (id: string) => void }) {
+function PhotoWall({ photos, state, error, onUpload, onRemove }: { photos: SharedPhoto[]; state: LoadState; error: string | null; onUpload: (files: FileList | null) => void; onRemove: (id: string) => void }) {
   const carouselPhotos = photos.length > 1 ? [...photos, ...photos] : photos;
   const full = photos.length >= maxPhotoCount;
   return (
-    <article className="glass photo-wall">
+    <article className="glass photo-wall shared">
       <div className="photo-wall-head">
-        <div><strong>生活相册</strong><span>{photos.length}/{maxPhotoCount} · 仅当前设备可见 · 慢速播放</span></div>
+        <div><strong>家庭共享相册</strong><span>{photos.length}/{maxPhotoCount} · Netlify 云端保存 · 慢速播放</span></div>
         <label className={full ? "photo-action disabled" : "photo-action"} title={full ? "最多 20 张，删除后可继续上传" : "上传照片"}>
           <ImagePlus size={18} />
           <input type="file" accept="image/*" multiple disabled={full} onChange={(event) => void onUpload(event.target.files)} />
         </label>
       </div>
-      {photos.length ? (
+      {state === "loading" ? <div className="photo-empty"><LoaderCircle className="spin" size={24} /><strong>相册同步中</strong><span>我们正在拉取共享照片</span></div> : null}
+      {state === "error" ? <div className="photo-empty"><AlertCircle size={24} /><strong>相册暂时不可用</strong><span>{error || "请稍后再试"}</span></div> : null}
+      {state === "ready" && photos.length ? (
         <div className="photo-carousel" style={{ "--photo-count": Math.max(photos.length, 1) } as CSSProperties}>
           <div className={photos.length > 1 ? "photo-track" : "photo-track still"}>
             {carouselPhotos.map((photo, index) => (
               <figure key={`${photo.id}-${index}`}>
                 <img src={photo.src} alt={photo.name} />
-                {index < photos.length ? <button type="button" onClick={() => onRemove(photo.id)}><X size={13} /></button> : null}
+                {index < photos.length ? <button type="button" onClick={() => void onRemove(photo.id)}><X size={13} /></button> : null}
               </figure>
             ))}
           </div>
         </div>
-      ) : (
+      ) : null}
+      {state === "ready" && photos.length === 0 ? (
         <label className="photo-empty">
           <Upload size={28} />
           <strong>放几张你们的照片</strong>
-          <span>先存在当前浏览器，最多 20 张。共享相册需要后端存储。</span>
+          <span>现在是全设备共享相册了，最多 20 张</span>
           <input type="file" accept="image/*" multiple onChange={(event) => void onUpload(event.target.files)} />
         </label>
-      )}
+      ) : null}
     </article>
   );
 }
@@ -225,7 +271,7 @@ function InsightColumn({ title, items, onSelect }: { title: string; items: Insig
 }
 
 function InsightCard({ item, onSelect, compact: isCompact = false }: { item: InsightItem; onSelect: (item: InsightItem) => void; compact?: boolean }) {
-  return <button type="button" className={isCompact ? "insight-card compact" : "insight-card"} onClick={() => onSelect(item)}><InsightImage item={item} /><div><span>{item.rank.toString().padStart(2, "0")} · {item.source}{item.metric ? ` · ${item.metric}` : ""}</span><h4>{item.title}</h4><p>{item.summary}</p></div></button>;
+  return <button type="button" className={isCompact ? "insight-card compact" : "insight-card"} onClick={() => onSelect(item)}>{shouldRenderInsightImage(item) ? <InsightImage item={item} /> : <div className="insight-thumb-empty"><Newspaper size={18} /></div>}<div><span>{item.rank.toString().padStart(2, "0")} · {item.source}{item.metric ? ` · ${item.metric}` : ""}</span><h4>{item.title}</h4><p>{item.summary}</p></div></button>;
 }
 
 function InsightImage({ item }: { item: InsightItem }) {
@@ -233,7 +279,57 @@ function InsightImage({ item }: { item: InsightItem }) {
 }
 
 function InsightModal({ item, onClose }: { item: InsightItem; onClose: () => void }) {
-  return <div className="modal-backdrop" role="presentation" onClick={onClose}><article className="glass insight-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><button type="button" className="modal-close" onClick={onClose}><X size={16} /></button><InsightImage item={item} /><div className="modal-copy"><span>{item.source} · #{item.rank}{item.publishedAt ? ` · ${formatDateTime(item.publishedAt)}` : ""}</span><h2>{item.title}</h2><p>{item.detail || item.summary}</p>{item.bullets?.length ? <ul>{item.bullets.map((bullet) => <li key={bullet}>{bullet}</li>)}</ul> : null}</div></article></div>;
+  const [remoteDetail, setRemoteDetail] = useState<InsightDetailResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!item.sourceUrl || item.source === "微博热搜") {
+      setRemoteDetail(null);
+      return;
+    }
+    const params = new URLSearchParams({ url: item.sourceUrl, title: item.title, source: item.source, imageUrl: item.imageUrl });
+    setLoading(true);
+    fetch(`/api/insight-detail?${params}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`Detail request failed with ${response.status}`);
+        return response.json() as Promise<InsightDetailResponse>;
+      })
+      .then((payload) => {
+        if (!cancelled) setRemoteDetail(payload);
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteDetail(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [item]);
+
+  const imageUrl = remoteDetail?.imageUrl || item.imageUrl;
+  const detailText = remoteDetail?.detail || item.detail || item.summary;
+  const detailParagraphs = detailText.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
+  const bullets = remoteDetail?.bullets?.length ? remoteDetail.bullets : item.bullets;
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <article className="glass insight-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="modal-close" onClick={onClose}><X size={16} /></button>
+        {shouldRenderInsightImage({ ...item, imageUrl }) ? <img src={imageUrl} alt="" onError={(event) => { event.currentTarget.src = makeClientPoster(item.title); }} /> : null}
+        <div className="modal-copy">
+          <span>{item.source} · #{item.rank}{item.publishedAt ? ` · ${formatDateTime(item.publishedAt)}` : ""}</span>
+          <h2>{item.title}</h2>
+          {loading ? <p className="detail-loading"><LoaderCircle className="spin" size={16} /> 正在补充详情…</p> : null}
+          <div className="modal-paragraphs">
+            {detailParagraphs.map((paragraph, index) => <p key={`${item.title}-${index}`}>{paragraph}</p>)}
+          </div>
+          {item.relatedPosts?.length ? <div className="related-posts">{item.relatedPosts.slice(0, 3).map((post, index) => <article key={`${post.author}-${index}`}><b>{post.author}</b><span>{post.time || "微博"}</span><p>{post.title}</p></article>)}</div> : null}
+          {bullets?.length ? <ul>{bullets.map((bullet) => <li key={bullet}>{bullet}</li>)}</ul> : null}
+        </div>
+      </article>
+    </div>
+  );
 }
 
 function StockControls({ query, suggestions, symbols, onAdd, onQuery, onRemove }: { query: string; suggestions: string[]; symbols: string[]; onAdd: (symbol: string) => void; onQuery: (query: string) => void; onRemove: (symbol: string) => void }) {
@@ -246,16 +342,8 @@ function StockCard({ stock }: { stock: StockReport }) {
   return <article className="glass stock-card"><div><span>{stock.symbol}</span><b>{stock.name}</b><em className={up ? "up" : "down"}>{up ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}{stock.changePercent ?? "--"}%</em></div><strong>{stock.price === null ? "--" : `$${money.format(stock.price)}`}</strong><MiniChart points={stock.chart} positive={up} /><dl><div><dt>开盘</dt><dd>{formatValue(stock.open)}</dd></div><div><dt>高/低</dt><dd>{formatValue(stock.high)} / {formatValue(stock.low)}</dd></div><div><dt>成交量</dt><dd>{formatCompact(stock.volume)}</dd></div><div><dt>市值</dt><dd>{formatCompact(stock.marketCap)}</dd></div><div><dt>52周</dt><dd>{formatValue(stock.fiftyTwoWeekLow)} / {formatValue(stock.fiftyTwoWeekHigh)}</dd></div><div><dt>来源</dt><dd>{stock.source}</dd></div></dl></article>;
 }
 
-function MarketPulseView({ pulse }: { pulse: MarketPulse }) {
-  return <section className="market-grid">{pulse.markets.map((market) => <article className="glass market-panel" key={market.market}><h3>{market.market}</h3><MarketList title="涨幅" rows={market.gainers} /><MarketList title="跌幅" rows={market.losers} /></article>)}<article className="glass market-panel"><h3>板块</h3><MarketList title="领涨" rows={pulse.sectors.gainers} /><MarketList title="领跌" rows={pulse.sectors.losers} /></article></section>;
-}
-
-function MarketList({ title, rows }: { title: string; rows: MarketRow[] }) {
-  return <div className="market-list"><b>{title}</b>{rows.slice(0, 10).map((row) => <p key={`${title}-${row.code}-${row.rank}`}><span>{row.rank}. {row.name}</span><em>{row.changePercent}%</em></p>)}</div>;
-}
-
 function RepoCard({ repo, index }: { repo: TrendingRepo; index: number }) {
-  return <article className="glass repo-card"><span>{index}</span><div><h3>{repo.fullName}</h3><p>{repo.summary}</p><small>{repo.language ?? "Mixed"} · {compact.format(repo.stars)} stars</small></div></article>;
+  return <a className="glass repo-card repo-link" href={repo.url} target="_blank" rel="noreferrer"><span>{index}</span><div><h3>{repo.fullName}</h3><p>{repo.summary}</p><small>{repo.language ?? "Mixed"} · {compact.format(repo.stars)} stars</small></div><ExternalLink size={16} /></a>;
 }
 
 function HoroscopeCard({ report }: { report: HoroscopeReport }) {
@@ -269,7 +357,8 @@ function MiniChart({ points, positive }: { points: Point[]; positive: boolean })
 
 function Skeleton() { return <div className="glass skeleton" />; }
 function useStoredState<T>(key: string, fallback: T) { const [value, setValue] = useState<T>(() => { try { const stored = window.localStorage.getItem(key); return stored ? JSON.parse(stored) as T : fallback; } catch { return fallback; } }); useEffect(() => { try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ } }, [key, value]); return [value, setValue] as const; }
-function readPhoto(file: File): Promise<PhotoItem> {
+function shouldRenderInsightImage(item: Pick<InsightItem, "source" | "imageUrl" | "title">) { return !(item.source === "微博热搜" && (!item.imageUrl || item.imageUrl.startsWith("data:image/svg"))); }
+function readPhoto(file: File): Promise<Pick<SharedPhoto, "name" | "src">> {
   return new Promise((resolve, reject) => {
     const objectUrl = URL.createObjectURL(file);
     const image = new Image();
@@ -283,7 +372,7 @@ function readPhoto(file: File): Promise<PhotoItem> {
       canvas.height = height;
       canvas.getContext("2d")?.drawImage(image, 0, 0, width, height);
       URL.revokeObjectURL(objectUrl);
-      resolve({ id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`, name: file.name, src: canvas.toDataURL("image/jpeg", 0.78) });
+      resolve({ name: file.name, src: canvas.toDataURL("image/jpeg", 0.78) });
     };
     image.onerror = () => {
       URL.revokeObjectURL(objectUrl);
