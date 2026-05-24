@@ -112,14 +112,18 @@ function useLocalStorage<T>(key: string, fallback: T) {
   return [value, setValue] as const;
 }
 
-function formatTime(iso: string) {
-  return new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(iso));
+function formatTime(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("zh-CN", {
+      timeZone: "Asia/Shanghai",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(new Date(iso));
+  } catch {
+    return "";
+  }
 }
 
 function makePoster(seed: string): string {
@@ -147,6 +151,7 @@ function getChartPath(points: Point[]): string {
 
 // ── TickerTape ─────────────────────────────────────────────────────────────
 function TickerTape({ stocks }: { stocks: StockReport[] }) {
+  // TODO: replace with live index/commodity data from backend
   const fixed = [
     { sym: "沪指",   price: "3,312.45", up: true,  pct: "+0.62%" },
     { sym: "深成指", price: "10,847.22", up: false, pct: "-0.18%" },
@@ -277,7 +282,7 @@ function NewsFeed({
 
   return (
     <>
-      <button className="news-hero" onClick={() => onSelect(hero)}>
+      <button type="button" className="news-hero" onClick={() => onSelect(hero)}>
         <div className="news-hero-img">
           <img
             src={hero.imageUrl || makePoster(hero.title)}
@@ -300,6 +305,7 @@ function NewsFeed({
       {rest.slice(0, 19).map((item) => (
         <button
           key={`${item.sourceId ?? item.source}-${item.title}`}
+          type="button"
           className="news-item"
           onClick={() => onSelect(item)}
         >
@@ -370,6 +376,7 @@ function StockSearch({
             {suggestions.map((sym) => (
               <button
                 key={sym}
+                type="button"
                 className="stock-dropdown-item"
                 onClick={() => onAdd(sym)}
               >
@@ -443,6 +450,7 @@ function StockGrid({
         return (
           <div key={stock.symbol} className="stock-card">
             <button
+              type="button"
               className="stock-card-remove"
               onClick={() => onRemove(stock.symbol)}
             >
@@ -475,6 +483,7 @@ function WeiboList({
       {items.map((item, i) => (
         <button
           key={item.title}
+          type="button"
           className="weibo-item"
           onClick={() => onSelect(item)}
         >
@@ -569,7 +578,7 @@ function NewsModal({
               e.currentTarget.src = makePoster(item.title);
             }}
           />
-          <button className="modal-close" onClick={onClose}>
+          <button type="button" className="modal-close" onClick={onClose}>
             ×
           </button>
         </div>
@@ -739,6 +748,7 @@ function App() {
           {NEWS_CATEGORIES.map((cat) => (
             <button
               key={cat}
+              type="button"
               className={`filter-btn${category === cat ? " active" : ""}`}
               onClick={() => setCategory(cat)}
             >
