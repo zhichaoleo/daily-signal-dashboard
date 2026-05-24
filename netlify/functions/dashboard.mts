@@ -139,26 +139,36 @@ async function getYahooChart(symbol: string): Promise<{ chart: Point[]; meta: Re
 }
 
 async function getDomesticNews(): Promise<InsightItem[]> {
-  const data = await fetchJson<{ data?: Array<Record<string, unknown>> }>("https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc", { "User-Agent": "Mozilla/5.0", Referer: "https://www.toutiao.com/" }).catch(() => ({ data: [] }));
-  return (data.data ?? []).slice(0, 10).map((item, index) => {
-    const title = String(item.Title ?? item.title ?? "热点新闻");
-    const image = item.Image && typeof item.Image === "object" && "url" in item.Image ? String(item.Image.url) : "";
-    const metric = formatCompact(Number(item.HotValue ?? item.hot_value ?? 0));
-    return { rank: index + 1, title, source: "今日头条热榜", summary: `过去 24 小时国内热度较高的话题：${title}。`, detail: `这是今日头条热榜中的高热国内议题。弹层会尝试补充更多可读正文；如果源站限制抓取，就保留话题摘要、热度和原文入口。`, bullets: [`热度：${metric || "更新中"}`, `标签：${String(item.Label ?? "hot")}`, "详情页会优先尝试补充源文内容。"], imageUrl: image || String(item.image_url ?? item.LabelUrl ?? makePoster(title)), metric, tag: String(item.Label ?? "hot"), sourceUrl: String(item.Url ?? "") };
-  });
+  return getRssNews("https://plink.anyfeeder.com/zaobao/realtime/china", "国内").then((items) => items.slice(0, 10));
 }
 
 async function getInternationalNews(): Promise<InsightItem[]> {
-  const url = "https://feeds.bbci.co.uk/zhongwen/trad/rss.xml";
-  return getRssNews(url, "国际中文").then((items) => items.slice(0, 10));
+  return getRssNews("https://plink.anyfeeder.com/zaobao/realtime/world", "国际中文").then((items) => items.slice(0, 10));
 }
 
 async function getRssNews(url: string, tag: string): Promise<InsightItem[]> {
   const xml = await fetchText(url); const parser = new XMLParser({ ignoreAttributes: false, trimValues: true }); const parsed = parser.parse(xml) as RssFeed;
   const raw = parsed.rss?.channel?.item; const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
   return list.map((item, index) => {
-    const rawTitle = stripHtml(item.title ?? "未命名新闻"); const source = getNewsSource(item.source, rawTitle); const title = rawTitle.replace(/\s+-\s+[^-]+$/, ""); const summary = stripHtml(item.description ?? "") || `${source} 发布的${tag}新闻。`;
-    return { rank: index + 1, title, source, summary, detail: `${summary} 详情页会继续尝试抓取源文的可读正文。`, bullets: [`来源：${source}`, `发布时间：${item.pubDate ? formatShanghaiTime(item.pubDate) : "更新中"}`], imageUrl: getRssThumbnail(item) || makePoster(title), publishedAt: item.pubDate ? new Date(item.pubDate).toISOString() : new Date().toISOString(), tag, sourceUrl: decodeXml(item.link ?? "") };
+    const rawTitle = stripHtml(item.title ?? "未命名新闻");
+    const source = getNewsSource(item.source, rawTitle);
+    const title = rawTitle.replace(/\s+-\s+[^-]+$/, "");
+    const descriptionHtml = String(item.description ?? "");
+    const summary = getSummaryFromHtml(descriptionHtml) || stripHtml(descriptionHtml) || `${source} 发布的${tag}新闻。`;
+    const detail = getDetailFromHtml(descriptionHtml) || summary;
+    const imageUrl = getRssThumbnail(item) || extractImageFromHtml(descriptionHtml) || makePoster(title);
+    return {
+      rank: index + 1,
+      title,
+      source,
+      summary,
+      detail,
+      bullets: [`来源：${source}`, `发布时间：${item.pubDate ? formatShanghaiTime(item.pubDate) : "更新中"}`, "点击卡片后在站内看摘要与正文片段。"],
+      imageUrl,
+      publishedAt: item.pubDate ? new Date(item.pubDate).toISOString() : new Date().toISOString(),
+      tag,
+      sourceUrl: decodeXml(item.link ?? ""),
+    };
   });
 }
 
@@ -279,6 +289,21 @@ function getRssThumbnail(item: RssItem): string {
   const thumb = item["media:thumbnail"];
   if (Array.isArray(thumb)) return String(thumb[0]?.["@_url"] ?? "");
   return typeof thumb === "object" && thumb ? String(thumb["@_url"] ?? "") : "";
+}
+function extractImageFromHtml(html: string): string {
+  const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  return match?.[1] ? decodeXml(match[1]) : "";
+}
+function getSummaryFromHtml(html: string): string {
+  return extractParagraphsFromHtml(html)[0]?.slice(0, 160) ?? "";
+}
+function getDetailFromHtml(html: string): string {
+  return extractParagraphsFromHtml(html).slice(0, 5).join("\n\n").slice(0, 1800);
+}
+function extractParagraphsFromHtml(html: string): string[] {
+  return Array.from(html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi))
+    .map((match) => stripHtml(match[1]))
+    .filter((line) => line.length > 18);
 }
 function roundOrNull(value: number | undefined): number | null { return typeof value === "number" && Number.isFinite(value) ? Math.round(value) : null; }
 function toNumberOrNull(value: number | undefined): number | null { return typeof value === "number" && Number.isFinite(value) ? Number(value.toFixed(2)) : null; }
