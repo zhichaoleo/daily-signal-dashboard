@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 type Point = { date: string; close: number };
-type NewsCategory = "全部" | "国内" | "国际" | "财经" | "科技";
+type NewsFilter = "全部" | string;
 
 type WeatherDay = {
   date: string;
@@ -90,7 +90,7 @@ const STOCK_NAMES: Record<string, string> = {
   TSLA: "特斯拉", AMZN: "亚马逊", AMD: "AMD", SAP: "SAP", SNDK: "闪迪",
   BABA: "阿里巴巴", ASML: "ASML", TSM: "台积电", PLTR: "Palantir", UBER: "Uber",
 };
-const NEWS_CATEGORIES: NewsCategory[] = ["全部", "国内", "国际", "财经", "科技"];
+const NEWS_SOURCES = ["澎湃新闻", "财新网", "新京报", "36氪", "虎嗅网", "BBC中文", "路透中文", "德国之声", "FT中文网", "观察者网"] as const;
 const money = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
 const compact = new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 });
 
@@ -626,7 +626,7 @@ function App() {
     "zhu-stocks",
     DEFAULT_SYMBOLS
   );
-  const [category, setCategory] = useState<NewsCategory>("全部");
+  const [category, setCategory] = useState<NewsFilter>("全部");
   const [selectedNews, setSelectedNews] = useState<NewsItem | null>(null);
   const [stockQuery, setStockQuery] = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -635,7 +635,7 @@ function App() {
 
   const filteredNews = (data?.newsFeed ?? []).filter((item) => {
     if (category === "全部") return true;
-    return item.tag === category;
+    return item.source === category;
   });
 
   const suggestions = POPULAR_STOCKS.filter(
@@ -745,14 +745,14 @@ function App() {
         </div>
 
         <div className="news-filters">
-          {NEWS_CATEGORIES.map((cat) => (
+          {(["全部", ...NEWS_SOURCES] as const).map((src) => (
             <button
-              key={cat}
+              key={src}
               type="button"
-              className={`filter-btn${category === cat ? " active" : ""}`}
-              onClick={() => setCategory(cat)}
+              className={`filter-btn${category === src ? " active" : ""}`}
+              onClick={() => setCategory(src)}
             >
-              {cat}
+              {src}
             </button>
           ))}
         </div>
