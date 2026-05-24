@@ -112,6 +112,23 @@ type AlphaVantageDaily = {
   >;
 };
 
+type YahooChartResponse = {
+  chart?: {
+    result?: Array<{
+      meta?: {
+        regularMarketPrice?: number;
+        currency?: string;
+      };
+      timestamp?: number[];
+      indicators?: {
+        quote?: Array<{
+          close?: Array<number | null>;
+        }>;
+      };
+    }>;
+  };
+};
+
 type GitHubSearchResponse = {
   items?: Array<{
     name: string;
@@ -360,7 +377,7 @@ async function getStockReport(stock: { symbol: string; name: string }): Promise<
   const alphaKey = getEnv("ALPHA_VANTAGE_API_KEY");
   const quote = finnhubKey ? await getFinnhubQuote(stock.symbol, finnhubKey).catch(() => null) : null;
   let chart: StockPoint[] = [];
-  let source = "stooq";
+  let source = "yahoo";
 
   if (finnhubKey) {
     chart = await getFinnhubCandles(stock.symbol, finnhubKey).catch(() => []);
@@ -373,8 +390,8 @@ async function getStockReport(stock: { symbol: string; name: string }): Promise<
   }
 
   if (chart.length < 2) {
-    chart = await getStooqDaily(stock.symbol).catch(() => []);
-    source = chart.length > 0 ? "stooq" : source;
+    chart = await getYahooChart(stock.symbol).catch(() => []);
+    source = chart.length > 0 ? "yahoo" : source;
   }
 
   const fallbackPrice = chart.at(-1)?.close ?? null;
@@ -456,21 +473,22 @@ async function getAlphaVantageDaily(symbol: string, apikey: string): Promise<Sto
     .slice(-5);
 }
 
-async function getStooqDaily(symbol: string): Promise<StockPoint[]> {
-  const normalized = `${symbol.toLowerCase().replace(".", "-")}.us`;
-  const params = new URLSearchParams({ s: normalized, i: "d" });
-  const text = await fetchText(`https://stooq.com/q/d/l/?${params.toString()}`);
-  const rows = text
-    .trim()
-    .split("\n")
-    .slice(1)
-    .map((row) => row.split(","))
-    .filter((row) => row.length >= 5);
+async function getYahooChart(symbol: string): Promise<StockPoint[]> {
+  const params = new URLSearchParams({ range: "5d", interval: "1d" });
+  const data = await fetchJson<YahooChartResponse>(
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?${params.toString()}`,
+    {
+      "User-Agent": "Mozilla/5.0 daily-signal-dashboard",
+    },
+  );
+  const result = data.chart?.result?.[0];
+  const timestamps = result?.timestamp ?? [];
+  const closes = result?.indicators?.quote?.[0]?.close ?? [];
 
-  return rows
-    .map((row) => ({
-      date: row[0],
-      close: Number(row[4]),
+  return timestamps
+    .map((time, index) => ({
+      date: new Date(time * 1000).toISOString().slice(0, 10),
+      close: Number(closes[index]),
     }))
     .filter((point) => point.date && Number.isFinite(point.close))
     .slice(-5);
