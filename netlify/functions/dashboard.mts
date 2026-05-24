@@ -150,14 +150,15 @@ async function getNewsFeed(): Promise<InsightItem[]> {
 async function getRssNews(sourceConfig: NewsSource): Promise<InsightItem[]> {
   const xml = await fetchText(sourceConfig.feedUrl); const parser = new XMLParser({ ignoreAttributes: false, trimValues: true }); const parsed = parser.parse(xml) as RssFeed;
   const raw = parsed.rss?.channel?.item; const list = (Array.isArray(raw) ? raw : raw ? [raw] : []).slice(0, 10);
-  return list.map((item, index) => {
+
+  const items = list.map((item, index) => {
     const rawTitle = stripHtml(item.title ?? "未命名新闻");
     const source = sourceConfig.label || getNewsSource(item.source, rawTitle);
     const title = rawTitle.replace(/\s+-\s+[^-]+$/, "");
     const descriptionHtml = String(item.description ?? "");
     const summary = getSummaryFromHtml(descriptionHtml) || stripHtml(descriptionHtml) || `${source} 发布的新闻。`;
     const detail = getDetailFromHtml(descriptionHtml) || summary;
-    const imageUrl = getRssThumbnail(item) || extractImageFromHtml(descriptionHtml) || makePoster(title);
+    const rssImage = getRssThumbnail(item) || extractImageFromHtml(descriptionHtml);
     return {
       rank: index + 1,
       title,
@@ -165,7 +166,8 @@ async function getRssNews(sourceConfig: NewsSource): Promise<InsightItem[]> {
       summary,
       detail,
       bullets: [`来源：${source}`, `发布时间：${item.pubDate ? formatShanghaiTime(item.pubDate) : "更新中"}`, "点击卡片后在站内看摘要与正文片段。"],
-      imageUrl,
+      imageUrl: rssImage || makePoster(title),
+      _needsOg: !rssImage,
       publishedAt: item.pubDate ? new Date(item.pubDate).toISOString() : new Date().toISOString(),
       tag: getNewsCategory(sourceConfig.id, rawTitle),
       sourceUrl: decodeXml(item.link ?? ""),
@@ -174,6 +176,16 @@ async function getRssNews(sourceConfig: NewsSource): Promise<InsightItem[]> {
       siteUrl: sourceConfig.siteUrl,
     };
   });
+
+  // Fetch OG images for items that had no RSS thumbnail, limit to first 5 per source
+  const ogFetches = items.slice(0, 5).map(async (item, idx) => {
+    if (!item._needsOg || !item.sourceUrl) return;
+    const og = await fetchOgImage(item.sourceUrl).catch(() => "");
+    if (og) items[idx].imageUrl = og;
+  });
+  await Promise.allSettled(ogFetches);
+
+  return items.map(({ _needsOg: _n, ...rest }) => rest);
 }
 
 function getWeiboHot(): InsightItem[] {
@@ -200,6 +212,26 @@ async function fetchText(url: string): Promise<string> {
   const response = await fetch(url, { headers: { Accept: "application/rss+xml, application/xml, text/xml, text/plain", "User-Agent": "Mozilla/5.0 daily-dashboard" } });
   if (!response.ok) throw new Error(`Request failed with ${response.status}`);
   return response.text();
+}
+async function fetchOgImage(articleUrl: string): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3000);
+  try {
+    const response = await fetch(articleUrl, { signal: controller.signal, headers: { "User-Agent": "Mozilla/5.0 daily-dashboard" } });
+    if (!response.ok) return "";
+    const html = await response.text();
+    const og = html.match(/property=["']og:image["'][^>]*content=["']([^"']+)/i)?.[1]
+      || html.match(/content=["']([^"']+)["'][^>]*property=["']og:image["']/i)?.[1]
+      || html.match(/name=["']twitter:image["'][^>]*content=["']([^"']+)/i)?.[1];
+    if (!og) return "";
+    if (/^https?:\/\//i.test(og)) return og;
+    if (og.startsWith("//")) return `https:${og}`;
+    return new URL(og, articleUrl).toString();
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
 }
 function json(body: unknown, status = 200, headers: Record<string, string> = {}) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json; charset=utf-8", ...headers } }); }
 function dateInShanghai(offsetDays: number): string { const date = new Date(); date.setUTCDate(date.getUTCDate() + offsetDays); return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(date); }
