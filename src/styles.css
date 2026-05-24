@@ -26,6 +26,9 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+button, input, select, textarea { font: inherit; }
+a { text-decoration: none; color: inherit; }
+
 /* ── 行情跑马灯 ── */
 .ticker-wrap {
   background: var(--ticker-bg);
@@ -36,7 +39,7 @@ body {
 }
 .ticker-label {
   background: var(--accent);
-  color: #fff;
+  color: #fdf8f0;
   font-family: var(--f-sans);
   font-size: 12px;
   font-weight: 700;
@@ -70,7 +73,7 @@ body {
   color: rgba(242,237,228,.75);
   border-right: 1px solid rgba(255,255,255,.1);
 }
-.ticker-item .t-sym   { font-weight: 700; color: #fff; }
+.ticker-item .t-sym   { font-weight: 700; color: #fdf8f0; }
 .ticker-item .t-price { color: rgba(255,255,255,.8); }
 .ticker-item .t-up    { color: #f07070; font-weight: 600; }
 .ticker-item .t-down  { color: #5ccba0; font-weight: 600; }
@@ -169,7 +172,7 @@ body {
 /* ── 头条大图 ── */
 .news-hero {
   display: flex; gap: 14px; margin-bottom: 16px;
-  padding-bottom: 16px; border-bottom: 1px solid var(--border); cursor: pointer;
+  padding-bottom: 16px; cursor: pointer;
   background: none; border: none; border-bottom: 1px solid var(--border);
   text-align: left; width: 100%;
 }
@@ -343,13 +346,13 @@ body {
   position: absolute; top: 12px; right: 12px;
   width: 32px; height: 32px; border-radius: 50%;
   background: rgba(0,0,0,.5); border: none; cursor: pointer;
-  color: #fff; font-size: 18px; display: flex; align-items: center; justify-content: center;
+  color: #fdf8f0; font-size: 18px; display: flex; align-items: center; justify-content: center;
   font-family: var(--f-sans); line-height: 1;
 }
 .modal-body { padding: 20px 24px 28px; overflow-y: auto; flex: 1; }
 .modal-source-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-family: var(--f-sans); }
 .modal-source-tag {
-  font-size: 11px; font-weight: 700; color: #fff;
+  font-size: 11px; font-weight: 700; color: #fdf8f0;
   background: var(--accent); padding: 3px 8px; border-radius: 2px;
 }
 .modal-time { font-size: 12px; color: var(--ink-light); }
