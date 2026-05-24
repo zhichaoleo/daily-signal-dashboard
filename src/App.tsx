@@ -265,9 +265,9 @@ function App() {
         <div className="hero-copy">
           <div className="eyebrow">
             <Sparkles size={16} aria-hidden="true" />
-            Lao Zhu
+            Lao Pig
           </div>
-          <h1>老朱Dashboard</h1>
+          <h1>老🐷Dashboard</h1>
           <p>上海时间 {shanghaiTimeFormat.format(now)}，天气、星运、市场、开源趋势和新闻都在这里。</p>
         </div>
 
