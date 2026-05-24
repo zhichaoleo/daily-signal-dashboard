@@ -1,18 +1,22 @@
 import type { Config, Context } from "@netlify/functions";
 import { XMLParser } from "fast-xml-parser";
+import { weiboSnapshot } from "./weibo-snapshot.mjs";
 
 type Point = { date: string; close: number };
-type WeatherReport = { id: string; district: string; condition: string; temperature: number | null; high: number | null; low: number | null; humidity: number | null; windSpeed: number | null; precipitationProbability: number | null; error?: string };
+type WeatherDay = { date: string; condition: string; high: number | null; low: number | null; precipitationProbability: number | null };
+type WeatherReport = { id: string; district: string; condition: string; temperature: number | null; high: number | null; low: number | null; humidity: number | null; windSpeed: number | null; precipitationProbability: number | null; forecast: WeatherDay[]; error?: string };
 type HoroscopeDay = { date: string; summary: string; mood: string; focus: string; luckyColor: string; luckyNumber: number };
 type HoroscopeReport = { sign: string; owner: string; days: HoroscopeDay[] };
 type StockReport = { symbol: string; name: string; price: number | null; change: number | null; changePercent: number | null; currency: string; chart: Point[]; source: string; open?: number | null; high?: number | null; low?: number | null; volume?: number | null; marketCap?: number | null; fiftyTwoWeekHigh?: number | null; fiftyTwoWeekLow?: number | null; dayRange?: string | null; error?: string };
-type InsightItem = { rank: number; title: string; source: string; summary: string; imageUrl: string; metric?: string; publishedAt?: string; tag?: string };
+type InsightItem = { rank: number; title: string; source: string; summary: string; imageUrl: string; metric?: string; publishedAt?: string; tag?: string; detail?: string; bullets?: string[]; sourceUrl?: string };
 type MarketRow = { rank: number; code: string; name: string; price: number | string; changePercent: number | string; change?: number | string; turnover?: number | string; marketCap?: number | string; market?: string };
 type MarketPulse = { markets: Array<{ market: string; gainers: MarketRow[]; losers: MarketRow[] }>; sectors: { gainers: MarketRow[]; losers: MarketRow[] } };
 type TrendingRepo = { name: string; fullName: string; url: string; description: string; summary: string; stars: number; language: string | null; topics: string[]; updatedAt: string };
-type DashboardResponse = { updatedAt: string; weather: WeatherReport[]; horoscopes: HoroscopeReport[]; stocks: StockReport[]; domesticNews: InsightItem[]; internationalNews: InsightItem[]; marketPulse: MarketPulse; trendingRepos: TrendingRepo[]; notices: string[] };
+type UsageMetric = { label: string; status: "live" | "missing-key" | "manual"; totalCost: number | null; currency: string; budget: number | null; progress: number | null; inputTokens?: number; outputTokens?: number; requests?: number; periodStart: string; periodEnd: string; updatedAt: string; message: string; dailyCosts: Point[] };
+type UsageSummary = { openai: UsageMetric; codex: UsageMetric };
+type DashboardResponse = { updatedAt: string; weather: WeatherReport[]; horoscopes: HoroscopeReport[]; stocks: StockReport[]; domesticNews: InsightItem[]; internationalNews: InsightItem[]; weiboHot: InsightItem[]; usage: UsageSummary; marketPulse: MarketPulse; trendingRepos: TrendingRepo[]; notices: string[] };
 
-type OpenMeteoResponse = { current?: { temperature_2m?: number; relative_humidity_2m?: number; weather_code?: number; wind_speed_10m?: number }; daily?: { temperature_2m_max?: number[]; temperature_2m_min?: number[]; precipitation_probability_max?: number[] } };
+type OpenMeteoResponse = { current?: { temperature_2m?: number; relative_humidity_2m?: number; weather_code?: number; wind_speed_10m?: number }; daily?: { time?: string[]; weather_code?: number[]; temperature_2m_max?: number[]; temperature_2m_min?: number[]; precipitation_probability_max?: number[] } };
 type FinnhubQuote = { c?: number; d?: number; dp?: number };
 type FinnhubCandles = { s?: string; t?: number[]; c?: number[] };
 type AlphaVantageDaily = { "Time Series (Daily)"?: Record<string, { "4. close"?: string }> };
@@ -20,6 +24,8 @@ type YahooChartResponse = { chart?: { result?: Array<{ meta?: Record<string, num
 type GitHubSearchResponse = { items?: Array<{ name: string; full_name: string; html_url: string; description: string | null; stargazers_count: number; language: string | null; topics?: string[]; updated_at: string }> };
 type RssFeed = { rss?: { channel?: { item?: RssItem | RssItem[] } } };
 type RssItem = { title?: string; link?: string; pubDate?: string; description?: string; source?: string | { "#text"?: string } };
+type OpenAiCostsResponse = { data?: Array<{ start_time?: number; results?: Array<{ amount?: { value?: number; currency?: string } }> }> };
+type OpenAiUsageResponse = { data?: Array<{ results?: Array<{ input_tokens?: number; output_tokens?: number; num_model_requests?: number }> }> };
 
 const weatherLocations = [
   { id: "jiading", district: "上海嘉定", latitude: 31.3747, longitude: 121.2653 },
@@ -38,21 +44,25 @@ export default async (req: Request, _context: Context) => {
   if (req.method !== "GET") return json({ error: "Method not allowed" }, 405);
 
   const symbols = parseSymbols(new URL(req.url).searchParams.get("symbols"));
-  const [weather, stocks, domesticNews, internationalNews, marketPulse, trendingRepos] = await Promise.all([
+  const [weather, stocks, domesticNews, internationalNews, marketPulse, trendingRepos, usage] = await Promise.all([
     getWeatherReports(),
     getStockReports(symbols),
     getDomesticNews(),
     getInternationalNews(),
     getMarketPulse(),
     getTrendingRepos(),
+    getUsageSummary(),
   ]);
+  const weiboHot = getWeiboHot();
 
   const notices = [
     domesticNews.length === 0 ? "国内新闻暂时没有拉到数据。" : "",
-    internationalNews.length === 0 ? "国际新闻暂时没有拉到数据。" : "",
+    internationalNews.length === 0 ? "国际中文新闻暂时没有拉到数据。" : "",
+    weiboHot.length === 0 ? "微博热榜快照暂时为空，可在本机运行 npm run sync:weibo 更新。" : "",
+    usage.openai.status === "missing-key" ? "OpenAI 用量监控需要在 Netlify 配置 OPENAI_ADMIN_KEY。" : "",
   ].filter(Boolean);
 
-  return json({ updatedAt: new Date().toISOString(), weather, horoscopes: getHoroscopeReports(), stocks, domesticNews, internationalNews, marketPulse, trendingRepos, notices } satisfies DashboardResponse, 200, {
+  return json({ updatedAt: new Date().toISOString(), weather, horoscopes: getHoroscopeReports(), stocks, domesticNews, internationalNews, weiboHot, usage, marketPulse, trendingRepos, notices } satisfies DashboardResponse, 200, {
     "Cache-Control": "public, max-age=180, stale-while-revalidate=600",
   });
 };
@@ -69,11 +79,18 @@ function parseSymbols(value: string | null): Array<{ symbol: string; name: strin
 
 async function getWeatherReports(): Promise<WeatherReport[]> {
   const results = await Promise.allSettled(weatherLocations.map(async (location) => {
-    const params = new URLSearchParams({ latitude: String(location.latitude), longitude: String(location.longitude), timezone: "Asia/Shanghai", current: "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m", daily: "temperature_2m_max,temperature_2m_min,precipitation_probability_max", forecast_days: "1" });
+    const params = new URLSearchParams({ latitude: String(location.latitude), longitude: String(location.longitude), timezone: "Asia/Shanghai", current: "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m", daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max", forecast_days: "7" });
     const data = await fetchJson<OpenMeteoResponse>(`https://api.open-meteo.com/v1/forecast?${params}`);
-    return { id: location.id, district: location.district, condition: weatherCodeText[data.current?.weather_code ?? -1] ?? "天气更新中", temperature: roundOrNull(data.current?.temperature_2m), high: roundOrNull(data.daily?.temperature_2m_max?.[0]), low: roundOrNull(data.daily?.temperature_2m_min?.[0]), humidity: roundOrNull(data.current?.relative_humidity_2m), windSpeed: roundOrNull(data.current?.wind_speed_10m), precipitationProbability: roundOrNull(data.daily?.precipitation_probability_max?.[0]) };
+    const forecast = (data.daily?.time ?? []).slice(0, 7).map((date, index) => ({
+      date,
+      condition: weatherCodeText[data.daily?.weather_code?.[index] ?? -1] ?? "更新中",
+      high: roundOrNull(data.daily?.temperature_2m_max?.[index]),
+      low: roundOrNull(data.daily?.temperature_2m_min?.[index]),
+      precipitationProbability: roundOrNull(data.daily?.precipitation_probability_max?.[index]),
+    }));
+    return { id: location.id, district: location.district, condition: weatherCodeText[data.current?.weather_code ?? -1] ?? forecast[0]?.condition ?? "天气更新中", temperature: roundOrNull(data.current?.temperature_2m), high: forecast[0]?.high ?? null, low: forecast[0]?.low ?? null, humidity: roundOrNull(data.current?.relative_humidity_2m), windSpeed: roundOrNull(data.current?.wind_speed_10m), precipitationProbability: forecast[0]?.precipitationProbability ?? null, forecast };
   }));
-  return results.map((result, index) => result.status === "fulfilled" ? result.value : { id: weatherLocations[index].id, district: weatherLocations[index].district, condition: "暂时不可用", temperature: null, high: null, low: null, humidity: null, windSpeed: null, precipitationProbability: null, error: getErrorMessage(result.reason, "Weather request failed") });
+  return results.map((result, index) => result.status === "fulfilled" ? result.value : { id: weatherLocations[index].id, district: weatherLocations[index].district, condition: "暂时不可用", temperature: null, high: null, low: null, humidity: null, windSpeed: null, precipitationProbability: null, forecast: [], error: getErrorMessage(result.reason, "Weather request failed") });
 }
 
 function getHoroscopeReports(): HoroscopeReport[] {
@@ -127,22 +144,65 @@ async function getDomesticNews(): Promise<InsightItem[]> {
   return (data.data ?? []).slice(0, 10).map((item, index) => {
     const title = String(item.Title ?? item.title ?? "热点新闻");
     const image = item.Image && typeof item.Image === "object" && "url" in item.Image ? String(item.Image.url) : "";
-    return { rank: index + 1, title, source: "今日头条热榜", summary: `过去 24 小时国内热度较高的话题：${title}。`, imageUrl: image || String(item.image_url ?? item.LabelUrl ?? makePoster(title)), metric: formatCompact(Number(item.HotValue ?? item.hot_value ?? 0)), tag: String(item.Label ?? "hot") };
+    const metric = formatCompact(Number(item.HotValue ?? item.hot_value ?? 0));
+    return { rank: index + 1, title, source: "今日头条热榜", summary: `过去 24 小时国内热度较高的话题：${title}。`, detail: `这是今日头条热榜中的高热国内议题。页面保留站内摘要和热度信息，避免整篇搬运原文；后续可以接入你指定的新闻源摘要服务。`, bullets: [`热度：${metric || "更新中"}`, `标签：${String(item.Label ?? "hot")}`, "点击卡片后在站内查看摘要，不跳转外部页面。"], imageUrl: image || String(item.image_url ?? item.LabelUrl ?? makePoster(title)), metric, tag: String(item.Label ?? "hot") };
   });
 }
 
 async function getInternationalNews(): Promise<InsightItem[]> {
-  const url = "https://news.google.com/rss/search?q=(Reuters%20OR%20BBC%20OR%20AP%20OR%20Bloomberg%20OR%20CNBC)%20when%3A1d&hl=zh-CN&gl=US&ceid=US%3Azh-Hans";
-  return getRssNews(url, "国际").then((items) => items.slice(0, 10));
+  const url = "https://news.google.com/rss/headlines/section/topic/WORLD?hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans";
+  return getRssNews(url, "国际中文").then((items) => items.slice(0, 10));
 }
 
 async function getRssNews(url: string, tag: string): Promise<InsightItem[]> {
   const xml = await fetchText(url); const parser = new XMLParser({ ignoreAttributes: false, trimValues: true }); const parsed = parser.parse(xml) as RssFeed;
   const raw = parsed.rss?.channel?.item; const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
   return list.map((item, index) => {
-    const rawTitle = stripHtml(item.title ?? "未命名新闻"); const source = getNewsSource(item.source, rawTitle); const title = rawTitle.replace(/\s+-\s+[^-]+$/, "");
-    return { rank: index + 1, title, source, summary: stripHtml(item.description ?? "") || `${source} 发布的${tag}新闻。`, imageUrl: makePoster(title), publishedAt: item.pubDate ? new Date(item.pubDate).toISOString() : new Date().toISOString(), tag };
+    const rawTitle = stripHtml(item.title ?? "未命名新闻"); const source = getNewsSource(item.source, rawTitle); const title = rawTitle.replace(/\s+-\s+[^-]+$/, ""); const summary = stripHtml(item.description ?? "") || `${source} 发布的${tag}新闻。`;
+    return { rank: index + 1, title, source, summary, detail: `${summary} 这是聚合 RSS 提供的中文国际新闻摘要。为了避免复制媒体全文，详情页展示摘要、来源和发布时间。`, bullets: [`来源：${source}`, `发布时间：${item.pubDate ? formatShanghaiTime(item.pubDate) : "更新中"}`, "如需全文源，可后续接入授权新闻 API。"], imageUrl: makePoster(title), publishedAt: item.pubDate ? new Date(item.pubDate).toISOString() : new Date().toISOString(), tag, sourceUrl: item.link };
   });
+}
+
+function getWeiboHot(): InsightItem[] {
+  return weiboSnapshot.items.slice(0, 10).map((item, index) => {
+    const title = item.word || "微博热搜";
+    const metric = formatCompact(Number(item.hot_value ?? 0));
+    const posts = "posts" in item && Array.isArray(item.posts) ? item.posts : [];
+    const postBullets = posts.slice(0, 3).map((post) => `${post.author || "微博用户"}：${stripHtml(String(post.title ?? "")).slice(0, 160)}`);
+    return { rank: index + 1, title, source: "微博热搜", summary: posts[0]?.title ? stripHtml(String(posts[0].title)).slice(0, 120) : `过去 24 小时微博高热话题：${title}。`, detail: `微博 opencli 当前热榜快照。热搜词为“${title}”，分类为“${item.category || "未标注"}”，热度值 ${metric || item.hot_value || "更新中"}。${posts.length ? "下面是 opencli 抓取到的相关微博正文摘要。" : "当前快照没有抓到该热搜下的微博正文。"}`, bullets: [`分类：${item.category || "未标注"}`, `热度：${metric || item.hot_value || "更新中"}`, `标签：${item.label || "普通热搜"}`, ...postBullets], imageUrl: makePoster(`微博-${title}`), metric, tag: item.label || item.category || "hot", publishedAt: weiboSnapshot.updatedAt, sourceUrl: item.url };
+  });
+}
+
+async function getUsageSummary(): Promise<UsageSummary> {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const periodStart = start.toISOString().slice(0, 10);
+  const periodEnd = now.toISOString().slice(0, 10);
+  const openaiBudget = numberFromEnv("OPENAI_MONTHLY_BUDGET_USD");
+  const codexBudget = numberFromEnv("CODEX_MONTHLY_BUDGET_USD");
+  const openai = await getOpenAiUsage(start, now, openaiBudget).catch((error) => makeUsageMetric("OpenAI API", "missing-key", openaiBudget, periodStart, periodEnd, getErrorMessage(error, "OpenAI 用量暂时不可用。")));
+  const codex = makeUsageMetric("Codex / ChatGPT", "manual", codexBudget, periodStart, periodEnd, "Codex/ChatGPT 套餐暂未提供可直接读取的个人订阅用量 API；这里先显示手动预算位，后续可接入导出的账单或官方接口。");
+  return { openai, codex };
+}
+
+async function getOpenAiUsage(start: Date, end: Date, budget: number | null): Promise<UsageMetric> {
+  const adminKey = getEnv("OPENAI_ADMIN_KEY");
+  const periodStart = start.toISOString().slice(0, 10);
+  const periodEnd = end.toISOString().slice(0, 10);
+  if (!adminKey) return makeUsageMetric("OpenAI API", "missing-key", budget, periodStart, periodEnd, "配置 OPENAI_ADMIN_KEY 后可显示本月 API 花费、请求数和 token。");
+
+  const startTime = String(Math.floor(start.getTime() / 1000));
+  const endTime = String(Math.floor(end.getTime() / 1000));
+  const authHeaders = { Authorization: `Bearer ${adminKey}`, "Content-Type": "application/json" };
+  const [costs, usage] = await Promise.all([
+    fetchJson<OpenAiCostsResponse>(`https://api.openai.com/v1/organization/costs?${new URLSearchParams({ start_time: startTime, end_time: endTime, bucket_width: "1d", limit: "31" })}`, authHeaders),
+    fetchJson<OpenAiUsageResponse>(`https://api.openai.com/v1/organization/usage/completions?${new URLSearchParams({ start_time: startTime, end_time: endTime, bucket_width: "1d", limit: "31" })}`, authHeaders).catch(() => ({ data: [] })),
+  ]);
+  const dailyCosts = (costs.data ?? []).map((bucket) => ({ date: bucket.start_time ? new Date(bucket.start_time * 1000).toISOString().slice(0, 10) : periodStart, close: sumCost(bucket.results ?? []) }));
+  const totalCost = Number(dailyCosts.reduce((sum, item) => sum + item.close, 0).toFixed(4));
+  const currency = costs.data?.flatMap((bucket) => bucket.results ?? []).find((result) => result.amount?.currency)?.amount?.currency ?? "usd";
+  const usageTotals = (usage.data ?? []).flatMap((bucket) => bucket.results ?? []).reduce((acc, item) => ({ inputTokens: acc.inputTokens + Number(item.input_tokens ?? 0), outputTokens: acc.outputTokens + Number(item.output_tokens ?? 0), requests: acc.requests + Number(item.num_model_requests ?? 0) }), { inputTokens: 0, outputTokens: 0, requests: 0 });
+  return { label: "OpenAI API", status: "live", totalCost, currency, budget, progress: budget ? Math.min(100, Number(((totalCost / budget) * 100).toFixed(1))) : null, ...usageTotals, periodStart, periodEnd, updatedAt: new Date().toISOString(), message: budget ? `本月预算 $${budget}，已使用 ${((totalCost / budget) * 100).toFixed(1)}%。` : "已连接 OpenAI Usage API；设置 OPENAI_MONTHLY_BUDGET_USD 后可显示预算进度。", dailyCosts };
 }
 
 async function getMarketPulse(): Promise<MarketPulse> {
@@ -159,22 +219,22 @@ async function getMarketPulse(): Promise<MarketPulse> {
 
 async function getEastmoneyRank(market: string, sort: "change" | "drop"): Promise<MarketRow[]> {
   const markets: Record<string, string> = { "hs-a": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048", hk: "m:116+t:3,m:116+t:4,m:116+t:1,m:116+t:2", us: "m:105,m:106,m:107" };
-  const url = eastmoneyUrl(markets[market], "f3", sort === "change" ? "1" : "0", "f2,f3,f4,f5,f6,f8,f9,f12,f14,f20", 8);
+  const url = eastmoneyUrl(markets[market], "f3", sort === "change" ? "1" : "0", "f2,f3,f4,f5,f6,f8,f9,f12,f14,f20", 10);
   const data = await fetchJson<{ data?: { diff?: Array<Record<string, unknown>> } }>(url, { "User-Agent": "Mozilla/5.0", Referer: "https://quote.eastmoney.com/" }).catch(() => ({ data: { diff: [] } }));
   return mapMarketRows(data.data?.diff ?? []);
 }
 
 async function getEastmoneySectors(sort: "change" | "drop"): Promise<MarketRow[]> {
-  const url = eastmoneyUrl("m:90+t:2", "f3", sort === "change" ? "1" : "0", "f12,f14,f2,f3,f62,f128,f136", 8);
+  const url = eastmoneyUrl("m:90+t:2", "f3", sort === "change" ? "1" : "0", "f12,f14,f2,f3,f62,f128,f136", 10);
   const data = await fetchJson<{ data?: { diff?: Array<Record<string, unknown>> } }>(url, { "User-Agent": "Mozilla/5.0", Referer: "https://quote.eastmoney.com/" }).catch(() => ({ data: { diff: [] } }));
   return mapMarketRows(data.data?.diff ?? []);
 }
 
 async function getYahooMovers(scrId: "day_gainers" | "day_losers"): Promise<MarketRow[]> {
-  const url = `https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?${new URLSearchParams({ scrIds: scrId, count: "8" })}`;
+  const url = `https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?${new URLSearchParams({ scrIds: scrId, count: "10" })}`;
   const data = await fetchJson<{ finance?: { result?: Array<{ quotes?: Array<Record<string, unknown>> }> } }>(url, { "User-Agent": "Mozilla/5.0 daily-dashboard" }).catch(() => ({ finance: { result: [] } }));
   const quotes = data.finance?.result?.[0]?.quotes ?? [];
-  return quotes.map((quote, index) => ({
+  return quotes.slice(0, 10).map((quote, index) => ({
     rank: index + 1,
     code: String(quote.symbol ?? ""),
     name: String(quote.shortName ?? quote.longName ?? quote.symbol ?? ""),
@@ -194,13 +254,13 @@ function eastmoneyUrl(fs: string, fid: string, po: string, fields: string, limit
 }
 
 function mapMarketRows(rows: Array<Record<string, unknown>>): MarketRow[] {
-  return rows.map((it, index) => ({ rank: index + 1, code: String(it.f12 ?? ""), name: String(it.f14 ?? ""), price: Number(it.f2), changePercent: Number(it.f3), change: Number(it.f4), turnover: Number(it.f6), marketCap: Number(it.f20) }));
+  return rows.slice(0, 10).map((it, index) => ({ rank: index + 1, code: String(it.f12 ?? ""), name: String(it.f14 ?? ""), price: Number(it.f2), changePercent: Number(it.f3), change: Number(it.f4), turnover: Number(it.f6), marketCap: Number(it.f20) }));
 }
 
 async function getTrendingRepos(): Promise<TrendingRepo[]> {
   const pushedAfter = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const data = await fetchJson<GitHubSearchResponse>(`https://api.github.com/search/repositories?${new URLSearchParams({ q: `stars:>1000 pushed:>${pushedAfter}`, sort: "stars", order: "desc", per_page: "20" })}`, { Accept: "application/vnd.github+json", "User-Agent": "daily-dashboard" }).catch(() => ({ items: [] }));
-  return (data.items ?? []).slice(0, 20).map((repo) => ({ name: repo.name, fullName: repo.full_name, url: repo.html_url, description: repo.description?.trim() || "这个项目暂无简介。", summary: `近期仍活跃的高星项目，主要语言 ${repo.language ?? "未标注"}。${repo.description ?? ""}`, stars: repo.stargazers_count, language: repo.language, topics: repo.topics ?? [], updatedAt: repo.updated_at }));
+  const data = await fetchJson<GitHubSearchResponse>(`https://api.github.com/search/repositories?${new URLSearchParams({ q: `stars:>1000 pushed:>${pushedAfter}`, sort: "stars", order: "desc", per_page: "10" })}`, { Accept: "application/vnd.github+json", "User-Agent": "daily-dashboard" }).catch(() => ({ items: [] }));
+  return (data.items ?? []).slice(0, 10).map((repo) => ({ name: repo.name, fullName: repo.full_name, url: repo.html_url, description: repo.description?.trim() || "这个项目暂无简介。", summary: `近期仍活跃的高星项目，主要语言 ${repo.language ?? "未标注"}。${repo.description ?? ""}`, stars: repo.stargazers_count, language: repo.language, topics: repo.topics ?? [], updatedAt: repo.updated_at }));
 }
 
 async function fetchJson<T>(url: string, headers: Record<string, string> = {}): Promise<T> {
@@ -215,6 +275,7 @@ async function fetchText(url: string): Promise<string> {
 }
 function json(body: unknown, status = 200, headers: Record<string, string> = {}) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json; charset=utf-8", ...headers } }); }
 function dateInShanghai(offsetDays: number): string { const date = new Date(); date.setUTCDate(date.getUTCDate() + offsetDays); return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(date); }
+function formatShanghaiTime(value: string): string { return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
 function hash(value: string): number { let result = 2166136261; for (const char of value) { result ^= char.charCodeAt(0); result = Math.imul(result, 16777619); } return result >>> 0; }
 function roundOrNull(value: number | undefined): number | null { return typeof value === "number" && Number.isFinite(value) ? Math.round(value) : null; }
 function toNumberOrNull(value: number | undefined): number | null { return typeof value === "number" && Number.isFinite(value) ? Number(value.toFixed(2)) : null; }
@@ -224,8 +285,11 @@ function stripHtml(value: string): string { return value.replace(/<[^>]*>/g, " "
 function getNewsSource(source: RssItem["source"], title: string): string { if (typeof source === "string" && source.trim()) return source.trim(); if (source && typeof source === "object" && source["#text"]) return source["#text"]; return title.split(" - ").at(-1)?.trim() || "News"; }
 function getErrorMessage(error: unknown, fallback: string): string { return error instanceof Error ? error.message : fallback; }
 function formatCompact(value: number): string { return Number.isFinite(value) && value > 0 ? new Intl.NumberFormat("zh-CN", { notation: "compact" }).format(value) : ""; }
+function numberFromEnv(key: string): number | null { const value = Number(getEnv(key)); return Number.isFinite(value) && value > 0 ? value : null; }
+function sumCost(results: Array<{ amount?: { value?: number } }>): number { return Number(results.reduce((sum, result) => sum + Number(result.amount?.value ?? 0), 0).toFixed(4)); }
+function makeUsageMetric(label: string, status: UsageMetric["status"], budget: number | null, periodStart: string, periodEnd: string, message: string): UsageMetric { return { label, status, totalCost: null, currency: "usd", budget, progress: null, periodStart, periodEnd, updatedAt: new Date().toISOString(), message, dailyCosts: [] }; }
 function makePoster(seed: string): string {
   const hue = hash(seed) % 360;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="hsl(${hue},65%,84%)"/><stop offset="1" stop-color="hsl(${(hue + 60) % 360},60%,72%)"/></linearGradient></defs><rect width="960" height="540" fill="url(#g)"/><circle cx="760" cy="120" r="170" fill="rgba(255,255,255,.28)"/><circle cx="180" cy="430" r="220" fill="rgba(255,255,255,.2)"/></svg>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="hsl(${hue},54%,88%)"/><stop offset="1" stop-color="hsl(${(hue + 48) % 360},48%,74%)"/></linearGradient><filter id="n"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter></defs><rect width="960" height="540" fill="url(#g)"/><rect width="960" height="540" opacity=".08" filter="url(#n)"/><path d="M70 420 C260 240 360 520 560 300 S780 120 910 250" fill="none" stroke="rgba(36,31,26,.18)" stroke-width="3"/><circle cx="768" cy="136" r="152" fill="rgba(255,255,255,.28)"/></svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
