@@ -49,6 +49,7 @@ const themeOptions: Array<{ id: ThemeId; name: string; tone: string }> = [
   { id: "paper", name: "宣纸晨光", tone: "Paper" },
   { id: "midnight", name: "夜航仪表", tone: "Nocturne" },
 ];
+const dashboardFeedRevision = "zaobao-rss-v1";
 
 function App() {
   const [data, setData] = useState<DashboardResponse | null>(null);
@@ -70,7 +71,7 @@ function App() {
     setState("loading");
     setError(null);
     try {
-      const response = await fetch(`/api/dashboard?${new URLSearchParams({ symbols: symbols.join(",") })}`);
+      const response = await fetch(`/api/dashboard?${new URLSearchParams({ symbols: symbols.join(","), rev: dashboardFeedRevision })}`);
       if (!response.ok) throw new Error(`Dashboard API returned ${response.status}`);
       setData((await response.json()) as DashboardResponse);
       setState("ready");

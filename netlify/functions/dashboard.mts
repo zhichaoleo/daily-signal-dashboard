@@ -62,7 +62,7 @@ export default async (req: Request, _context: Context) => {
   ].filter(Boolean);
 
   return json({ updatedAt: new Date().toISOString(), weather, horoscopes: getHoroscopeReports(), stocks, domesticNews, internationalNews, weiboHot, usage, trendingRepos, notices } satisfies DashboardResponse, 200, {
-    "Cache-Control": "public, max-age=180, stale-while-revalidate=600",
+    "Cache-Control": "public, max-age=60, stale-while-revalidate=120",
   });
 };
 
