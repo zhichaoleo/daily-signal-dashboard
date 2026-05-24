@@ -173,23 +173,45 @@ async function getWeiboHot(): Promise<InsightItem[]> {
 }
 
 async function getMarketPulse(): Promise<MarketPulse> {
-  const [aUp, aDown, hkUp, hkDown, usUp, usDown, secUp, secDown] = await Promise.all([
-    getEastmoneyRank("hs-a", "change"), getEastmoneyRank("hs-a", "drop"), getEastmoneyRank("hk", "change"), getEastmoneyRank("hk", "drop"), getEastmoneyRank("us", "change"), getEastmoneyRank("us", "drop"), getEastmoneySectors("change"), getEastmoneySectors("drop"),
-  ]);
+  const aUp = await getEastmoneyRank("hs-a", "change");
+  const aDown = await getEastmoneyRank("hs-a", "drop");
+  const hkUp = await getEastmoneyRank("hk", "change");
+  const hkDown = await getEastmoneyRank("hk", "drop");
+  const usUp = await getYahooMovers("day_gainers");
+  const usDown = await getYahooMovers("day_losers");
+  const secUp = await getEastmoneySectors("change");
+  const secDown = await getEastmoneySectors("drop");
   return { markets: [{ market: "A股", gainers: aUp, losers: aDown }, { market: "港股", gainers: hkUp, losers: hkDown }, { market: "美股", gainers: usUp, losers: usDown }], sectors: { gainers: secUp, losers: secDown } };
 }
 
 async function getEastmoneyRank(market: string, sort: "change" | "drop"): Promise<MarketRow[]> {
   const markets: Record<string, string> = { "hs-a": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048", hk: "m:116+t:3,m:116+t:4,m:116+t:1,m:116+t:2", us: "m:105,m:106,m:107" };
   const url = eastmoneyUrl(markets[market], "f3", sort === "change" ? "1" : "0", "f2,f3,f4,f5,f6,f8,f9,f12,f14,f20", 8);
-  const data = await fetchJson<{ data?: { diff?: Array<Record<string, unknown>> } }>(url).catch(() => ({ data: { diff: [] } }));
+  const data = await fetchJson<{ data?: { diff?: Array<Record<string, unknown>> } }>(url, { "User-Agent": "Mozilla/5.0", Referer: "https://quote.eastmoney.com/" }).catch(() => ({ data: { diff: [] } }));
   return mapMarketRows(data.data?.diff ?? []);
 }
 
 async function getEastmoneySectors(sort: "change" | "drop"): Promise<MarketRow[]> {
   const url = eastmoneyUrl("m:90+t:2", "f3", sort === "change" ? "1" : "0", "f12,f14,f2,f3,f62,f128,f136", 8);
-  const data = await fetchJson<{ data?: { diff?: Array<Record<string, unknown>> } }>(url).catch(() => ({ data: { diff: [] } }));
+  const data = await fetchJson<{ data?: { diff?: Array<Record<string, unknown>> } }>(url, { "User-Agent": "Mozilla/5.0", Referer: "https://quote.eastmoney.com/" }).catch(() => ({ data: { diff: [] } }));
   return mapMarketRows(data.data?.diff ?? []);
+}
+
+async function getYahooMovers(scrId: "day_gainers" | "day_losers"): Promise<MarketRow[]> {
+  const url = `https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved?${new URLSearchParams({ scrIds: scrId, count: "8" })}`;
+  const data = await fetchJson<{ finance?: { result?: Array<{ quotes?: Array<Record<string, unknown>> }> } }>(url, { "User-Agent": "Mozilla/5.0 daily-dashboard" }).catch(() => ({ finance: { result: [] } }));
+  const quotes = data.finance?.result?.[0]?.quotes ?? [];
+  return quotes.map((quote, index) => ({
+    rank: index + 1,
+    code: String(quote.symbol ?? ""),
+    name: String(quote.shortName ?? quote.longName ?? quote.symbol ?? ""),
+    price: Number(quote.regularMarketPrice),
+    changePercent: Number(quote.regularMarketChangePercent),
+    change: Number(quote.regularMarketChange),
+    turnover: Number(quote.regularMarketVolume),
+    marketCap: Number(quote.marketCap),
+    market: "US",
+  }));
 }
 
 function eastmoneyUrl(fs: string, fid: string, po: string, fields: string, limit: number) {
